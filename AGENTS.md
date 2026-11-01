@@ -6,10 +6,10 @@
 
 The workspace is organized into modules:
 
-- `modules/rootfs/`: Layer 1 Linux pivot root container and runsvdir supervisor with cgroup v1. (See [modules/rootfs/AGENTS.md](file:///home/kui04/Workspace/xiaomi_phoenix_server/modules/rootfs/AGENTS.md)).
-- `modules/dockerd/`: Static Docker Engine running under Layer 1 rootfs. (See [modules/dockerd/AGENTS.md](file:///home/kui04/Workspace/xiaomi_phoenix_server/modules/dockerd/AGENTS.md)).
-- `modules/headless/`: Headless Linux server setup. Stops the Android UI stack, controls battery charging, and manages Wi-Fi under rootfs. (See [modules/headless/AGENTS.md](file:///home/kui04/Workspace/xiaomi_phoenix_server/modules/headless/AGENTS.md)).
-- `modules/singbox/`: sing-box transparent proxy using TUN interface and iptables redirect under rootfs. (See [modules/singbox/AGENTS.md](file:///home/kui04/Workspace/xiaomi_phoenix_server/modules/singbox/AGENTS.md)).
+- `modules/rootfs/`: Layer 1 Linux pivot root container and runsvdir supervisor with cgroup v1. (See [modules/rootfs/AGENTS.md](modules/rootfs/AGENTS.md)).
+- `modules/dockerd/`: Static Docker Engine running under Layer 1 rootfs. (See [modules/dockerd/AGENTS.md](modules/dockerd/AGENTS.md)).
+- `modules/headless/`: Headless Linux server setup. Stops the Android UI stack, controls battery charging, and manages Wi-Fi under rootfs. (See [modules/headless/AGENTS.md](modules/headless/AGENTS.md)).
+- `modules/singbox/`: sing-box transparent proxy using TUN interface and iptables redirect under rootfs. (See [modules/singbox/AGENTS.md](modules/singbox/AGENTS.md)).
 
 ## System Architecture Layers
 
@@ -37,9 +37,18 @@ The server operates in three decoupled architecture layers:
     iptables rules (`MASQUERADE`, `FORWARD`).
   - Hosts system daemons: transparent proxy (`sing-box`) and the Docker
     daemon (`dockerd`).
+  - Provisions hardware acceleration drivers from `flake.nix`
+    (`.#layer1-drivers`): Turnip Adreno Vulkan (`libvulkan_freedreno.so`) and
+    MSM V4L2 VA-API video decode (`msm_drm_drv_video.so`).
+  - Sets `0666` permissions for GPU and codec nodes (`/dev/kgsl-3d0`,
+    `/dev/ion`, `/dev/video*`, `/dev/dri/*`).
 - **Layer 2 (Docker Containers)**:
   - User applications and workloads running as standard Docker containers.
   - Executed and managed by the Layer 1 Docker Engine.
+  - Can mount Layer 1 drivers to use Turnip Vulkan 1.3, Mesa Zink OpenGL 4.6 /
+    GLES 3.2, and VA-API hardware video decode (see
+    `modules/dockerd/module/etc/docker-compose.hardware-accel.yml` and
+    Hardware Codec Boundary below).
 
 ## Shell Code Standards
 
@@ -151,8 +160,22 @@ nix shell nixpkgs#clang-tools -c clang-tidy modules/headless/src/*.c -- \
   -I modules/headless/src -std=c11 -D_GNU_SOURCE
 ```
 
+### 6. Driver Payload Verification (`nix build`)
+
+Build and verify the cross-compiled hardware acceleration drivers:
+
+```bash
+# Build Mesa Turnip Vulkan driver (freedreno KGSL/MSM)
+nix build .#mesa-kgsl
+
+# Build complete Layer 1 driver payload (Vulkan, VA-API, libdrm)
+nix build .#layer1-drivers
+```
+
 ## Operational Boundaries
 
 - **Git Commit Boundary**: Never stage or commit changes without explicit user approval.
 - **Hardware Boundary**: Do not stop Qualcomm vendor daemons (`cnss-daemon`, `rmtfs`, `pd-mapper`) or Android init PID 1.
+- **Hardware Codec Boundary**: Do not use `/dev/video33` for hardware video encoding; MSM 4.14 kernel lacks required V4L2 ioctls (`VIDIOC_TRY_FMT` and DMABUF import). Use CPU software encoding (`x264enc`).
+- **Display Boundary**: Headless Wayland compositors (`labwc`, `sway`) must use `WLR_RENDERER=pixman` because the Android DSI panel lacks desktop DRM/KMS scanout connectors.
 - **Filesystem Boundary**: Never commit files in `.cache/`, `dist/`, or downloaded binary payloads in `module/files/`.

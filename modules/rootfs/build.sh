@@ -32,6 +32,27 @@ stage_busybox() {
 }
 
 #######################################
+# Copy the GPU acceleration drivers from the Nix flake into files/.
+# Globals:
+#   FILES_DIR
+#   LAYER1_DRIVERS
+#   ROOT_DIR
+# Arguments:
+#   None. LAYER1_DRIVERS names a layer1-drivers output to use.
+#######################################
+stage_drivers() {
+  local drivers_dir="${LAYER1_DRIVERS:-}"
+  if [[ -z "${drivers_dir}" ]]; then
+    drivers_dir="$(nix build --no-link --print-out-paths \
+      "${ROOT_DIR}/../..#layer1-drivers")"
+  fi
+  mkdir -p "${FILES_DIR}/lib/dri" "${FILES_DIR}/share/vulkan/icd.d"
+  cp -af "${drivers_dir}/lib/." "${FILES_DIR}/lib/"
+  cp -af "${drivers_dir}/share/." "${FILES_DIR}/share/"
+  chmod -R u+w "${FILES_DIR}/lib" "${FILES_DIR}/share"
+}
+
+#######################################
 # Build the zip from the staged binary.
 # Globals:
 #   DIST_DIR
@@ -44,6 +65,7 @@ main() {
   version="$(sed -n 's/^version=//p' "${MODULE_DIR}/module.prop")"
   mkdir -p "${DIST_DIR}"
   stage_busybox
+  stage_drivers
   chmod 755 "${MODULE_DIR}"/*.sh "${MODULE_DIR}"/scripts/*.sh
   chmod 644 "${MODULE_DIR}/scripts/settings.sh"
   zip="${DIST_DIR}/rootfs-${version}.zip"

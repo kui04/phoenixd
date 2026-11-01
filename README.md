@@ -216,7 +216,7 @@ All shell scripts follow the Google Shell Style Guide:
 - **Static Analysis**: Lint scripts with ShellCheck (`.shellcheckrc`).
 - **Syntax Check**: Verify scripts parse cleanly under BusyBox ash.
 
-See [AGENTS.md](file:///home/kui04/Workspace/xiaomi_phoenix_server/AGENTS.md)
+See [AGENTS.md](AGENTS.md)
 for exact lint and format commands.
 
 ## Licenses

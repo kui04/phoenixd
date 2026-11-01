@@ -27,10 +27,14 @@ under `/data/adb/rootfs/service/<name>` and run inside this container.
   - `module/scripts/cleanup.sh`: uninstall cleanup.
   - `module/scripts/settings.sh`: default DNS configuration.
   - `module/files/busybox`: build artifact, gitignored.
-- `build.sh`: takes static `busybox` from the root `flake.nix` (`.#layer1-bin`),
-  writes `dist/rootfs-<version>.zip`.
-- Runtime tree: `/data/adb/rootfs` with `bin/`, `service/`, `root/` (tmpfs root),
-  `run/` (`rootfs.pid`, `rootfs.log`), and `settings.sh`.
+  - `module/files/lib/`, `module/files/share/`: hardware acceleration drivers
+    from `flake.nix` (`.#layer1-drivers`, see root [AGENTS.md](../../AGENTS.md)),
+    gitignored.
+- `build.sh`: takes static `busybox` (`.#layer1-bin`) and `layer1-drivers`
+  from the root `flake.nix`, writes `dist/rootfs-<version>.zip`.
+- Runtime tree: `/data/adb/rootfs` with `bin/`, `lib/` (drivers), `share/`
+  (Vulkan ICD), `service/`, `root/` (tmpfs root), `run/` (`rootfs.pid`,
+  `rootfs.log`), and `settings.sh`.
 
 Requirements: KernelSU Next 3.4.2 or newer, arm64, Android 14 (or Android 13+).
 Kernel options: mount namespaces (`CONFIG_NAMESPACES`), cgroup v1 (`cpu`,
@@ -59,6 +63,10 @@ Kernel options: mount namespaces (`CONFIG_NAMESPACES`), cgroup v1 (`cpu`,
 - Use `pivot_root`, not `chroot`.
 - The root filesystem is a 64 MB tmpfs. Host paths (`/data`, `/sdcard`,
   `/storage`, `/system`, `/apex`, `/vendor`) are bind mounted into it.
+- `start.sh` mounts `/data/adb/rootfs/lib` to `/lib` and
+  `/data/adb/rootfs/share/vulkan` to `/usr/share/vulkan` in the container.
+- `setup_device_permissions` in `start.sh` grants `0666` permissions to GPU
+  and codec nodes for container access (see root [AGENTS.md](../../AGENTS.md)).
 - Keep the `/sys` bind mount in the container for BPF filters and netd.
 - Never mount `cpuset` inside the container because Android mounts it with
   `noprefix`.

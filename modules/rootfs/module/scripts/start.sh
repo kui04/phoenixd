@@ -83,6 +83,15 @@ setup_root() {
   done
 
   bb_mount -o bind "${ROOTFS_DIR}/bin" "${ROOT_DIR}/bin"
+  if [ -d "${ROOTFS_DIR}/lib" ]; then
+    mkdir -p "${ROOT_DIR}/lib"
+    bb_mount -o bind "${ROOTFS_DIR}/lib" "${ROOT_DIR}/lib"
+  fi
+  if [ -d "${ROOTFS_DIR}/share/vulkan" ]; then
+    mkdir -p "${ROOT_DIR}/usr/share/vulkan"
+    bb_mount -o bind "${ROOTFS_DIR}/share/vulkan" \
+      "${ROOT_DIR}/usr/share/vulkan"
+  fi
   bb_mount -o bind "${RUN_DIR}" "${ROOT_DIR}/run"
   bb_mount -o bind "${SERVICE_DIR}" "${ROOT_DIR}/service"
   bb_mount -t tmpfs -o size=64m tmpfs "${ROOT_DIR}/tmp"
@@ -93,6 +102,16 @@ setup_root() {
     if [ -d "/${subdir}" ]; then
       bb_mount -o rbind "/${subdir}" "${ROOT_DIR}/${subdir}"
     fi
+  done
+}
+
+#######################################
+# Allow unprivileged access to GPU, video codec and allocator nodes.
+#######################################
+setup_device_permissions() {
+  local node
+  for node in /dev/kgsl-3d0 /dev/ion /dev/video* /dev/dri/*; do
+    [ -e "${node}" ] && chmod 0666 "${node}" 2>/dev/null || true
   done
 }
 
@@ -170,6 +189,7 @@ main() {
   fi
   check_namespace
   check_running
+  setup_device_permissions
   setup_root
   setup_cgroups
   write_root_files

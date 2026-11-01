@@ -141,6 +141,19 @@ patch` of `DOCKER_VERSION` (29.9.2 -> 290902).
 - Custom networks from `docker network create` are not registered with netd.
   Add `ndc network route add local br-<id> <subnet>` by hand.
 
+## Hardware Acceleration (GPU and Video Decode)
+
+Docker containers can access Adreno 618 GPU acceleration and MSM hardware video
+decoding by mounting Layer 1 drivers from `/data/adb/rootfs`.
+
+- **Configuration Template**: See
+  [module/etc/docker-compose.hardware-accel.yml](module/etc/docker-compose.hardware-accel.yml)
+  for device mappings, volume mounts, and environment variables.
+- **Operational Boundaries**: See root
+  [AGENTS.md](../../AGENTS.md#operational-boundaries) for driver provisioning,
+  encoding constraints (`/dev/video33`), and headless Wayland compositor
+  requirements (`WLR_RENDERER=pixman`).
+
 ## Troubleshooting
 
 - Daemon log: `dockerd-service log 100` or

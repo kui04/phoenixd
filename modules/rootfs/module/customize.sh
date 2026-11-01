@@ -23,7 +23,8 @@ if [ -x "${BIN_DIR}/busybox" ]; then
   sh "${MODPATH}/scripts/control.sh" stop >/dev/null 2>&1
 fi
 
-mkdir -p "${BIN_DIR}" "${ROOTFS_DIR}/run" "${ROOTFS_DIR}/service"
+mkdir -p "${BIN_DIR}" "${ROOTFS_DIR}/run" "${ROOTFS_DIR}/service" \
+  "${ROOTFS_DIR}/lib/dri" "${ROOTFS_DIR}/share/vulkan/icd.d"
 
 ui_print '- Installing binaries'
 cp -f "${MODPATH}/files/busybox" "${BIN_DIR}/busybox" \
@@ -33,6 +34,20 @@ chmod 755 "${BIN_DIR}/busybox"
 for name in sh runsv runsvdir sv nsenter; do
   ln -sf busybox "${BIN_DIR}/${name}"
 done
+
+if [ -d "${MODPATH}/files/lib" ]; then
+  ui_print '- Installing hardware acceleration drivers'
+  rm -rf "${ROOTFS_DIR:?}/lib"
+  mkdir -p "${ROOTFS_DIR}/lib"
+  cp -af "${MODPATH}/files/lib/." "${ROOTFS_DIR}/lib/"
+fi
+
+if [ -d "${MODPATH}/files/share" ]; then
+  rm -rf "${ROOTFS_DIR:?}/share"
+  mkdir -p "${ROOTFS_DIR}/share"
+  cp -af "${MODPATH}/files/share/." "${ROOTFS_DIR}/share/"
+fi
+
 rm -rf "${MODPATH}/files"
 
 if [ ! -f "${ROOTFS_DIR}/settings.sh" ]; then
@@ -48,6 +63,14 @@ if [ -d "${KSU_BIN_DIR}" ]; then
 fi
 
 set_perm_recursive "${BIN_DIR}" 0 0 0755 0755
+if [ -d "${ROOTFS_DIR}/lib" ]; then
+  set_perm_recursive "${ROOTFS_DIR}/lib" 0 0 0755 0755
+fi
+if [ -d "${ROOTFS_DIR}/share" ]; then
+  set_perm_recursive "${ROOTFS_DIR}/share" 0 0 0755 0644
+  chmod 755 "${ROOTFS_DIR}/share" "${ROOTFS_DIR}/share/vulkan" \
+    "${ROOTFS_DIR}/share/vulkan/icd.d" 2>/dev/null || true
+fi
 set_perm "${ROOTFS_DIR}/settings.sh" 0 0 0644
 set_perm_recursive "${MODPATH}/scripts" 0 0 0755 0755
 set_perm "${MODPATH}/scripts/settings.sh" 0 0 0644
