@@ -1,5 +1,5 @@
 {
-  description = "Static aarch64 payloads and tooling for xiaomi_phoenix_server";
+  description = "Static aarch64 payloads and tooling for phoenixd";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 

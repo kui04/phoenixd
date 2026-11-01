@@ -2,13 +2,13 @@
 
 ## Repository Overview
 
-`xiaomi_phoenix_server` is a monorepo for transforming a Redmi K30 (`phoenix`, Qualcomm SM7150) device running Android 14 (BlissROM) and KernelSU Next 3.4.2 into a headless Linux server.
+`phoenixd` is a monorepo for transforming a Redmi K30 (`phoenix`, Qualcomm SM7150) device running Android 14 (BlissROM) and KernelSU Next 3.4.2 into a headless Linux server.
 
 The workspace is organized into modules:
 
 - `modules/rootfs/`: Layer 1 Linux pivot root container and runsvdir supervisor with cgroup v1. (See [modules/rootfs/AGENTS.md](file:///home/kui04/Workspace/xiaomi_phoenix_server/modules/rootfs/AGENTS.md)).
 - `modules/dockerd/`: Static Docker Engine running under Layer 1 rootfs. (See [modules/dockerd/AGENTS.md](file:///home/kui04/Workspace/xiaomi_phoenix_server/modules/dockerd/AGENTS.md)).
-- `modules/headless/`: Headless Linux server setup. Stops the Android UI stack and manages Wi-Fi under rootfs. (See [modules/headless/AGENTS.md](file:///home/kui04/Workspace/xiaomi_phoenix_server/modules/headless/AGENTS.md)).
+- `modules/headless/`: Headless Linux server setup. Stops the Android UI stack, controls battery charging, and manages Wi-Fi under rootfs. (See [modules/headless/AGENTS.md](file:///home/kui04/Workspace/xiaomi_phoenix_server/modules/headless/AGENTS.md)).
 - `modules/singbox/`: sing-box transparent proxy using TUN interface and iptables redirect under rootfs. (See [modules/singbox/AGENTS.md](file:///home/kui04/Workspace/xiaomi_phoenix_server/modules/singbox/AGENTS.md)).
 
 ## System Architecture Layers
@@ -22,7 +22,8 @@ The server operates in three decoupled architecture layers:
   - File-Based Encryption (FBE) data decryption and hardware radio drivers
     (`qcacld-3.0`).
   - Native vendor daemons stay active; Android UI stack (`zygote`,
-    `surfaceflinger`, media) stops after boot (`modules/headless`).
+    `surfaceflinger`, media) stops after boot, and battery charging is
+    controlled (`modules/headless`).
 - **Layer 1 (Pivot Root Container)**:
   - Persistent Linux container environment created with `unshare -m` and
     `pivot_root` (`modules/rootfs`).
