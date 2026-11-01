@@ -1,0 +1,7 @@
+id=rootfs
+name=Layer 1 Pivot Rootfs
+version=0.1.0
+versionCode=100
+author=kui04
+description=Layer 1 pivot root container and runsvdir supervisor with cgroup v1. Control: rootfs-service
+

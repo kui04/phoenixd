@@ -1,0 +1,6 @@
+id=singbox
+name=sing-box
+version=1.14.3
+versionCode=11403
+author=kui04
+description=sing-box transparent proxy using TUN interface. Control: singbox-service start|stop|restart|status|log|check

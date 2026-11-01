@@ -1,0 +1,24 @@
+# Build artifacts and downloaded caches
+.cache/
+dist/
+**/.cache/
+**/dist/
+*.part
+
+# Module binary payloads (downloaded during build)
+**/module/files/busybox
+**/module/files/docker.tar.xz
+**/module/files/cli-plugins/
+**/module/files/sing-box
+
+# Temporary files
+*.tmp
+# Nix and direnv
+.direnv/
+result
+result-*
+
+# Static binaries staged by modules/headless/build.sh
+**/module/files/wpa_supplicant
+**/module/files/wpa_cli
+**/module/files/iw

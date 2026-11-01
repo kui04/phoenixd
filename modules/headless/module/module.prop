@@ -1,0 +1,6 @@
+id=headless
+name=Headless Android
+version=0.1.0
+versionCode=100
+author=kui04
+description=Stops the Android UI stack and runs Wi-Fi from static wpa_supplicant and udhcpc under runsvdir. Control: headless-service

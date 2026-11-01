@@ -1,0 +1,7 @@
+# ShellCheck configuration file
+# SC1091: Sourced files not found or dynamic paths (settings.sh, common.sh).
+# SC2034: Variables unused in declaring script (sourced externally or harness config).
+# SC2154: Variables unassigned (set by udhcpc).
+# SC2086: Word splitting without quotes (intentional iteration over service lists).
+# SC2016: Expressions in single quotes (awk programs).
+disable=SC1091,SC2034,SC2154,SC2086,SC2016
