@@ -23,6 +23,8 @@ result-*
 **/module/files/wpa_cli
 **/module/files/iw
 **/module/files/phx-statusd
+**/module/files/dns-forwarder
 modules/headless/src/*.o
 modules/headless/src/*.d
 modules/headless/src/phx-statusd
+modules/headless/src/dns-forwarder

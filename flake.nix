@@ -21,6 +21,7 @@
             installPhase = ''
               mkdir -p $out/bin
               cp phx-statusd $out/bin/
+              cp dns-forwarder $out/bin/
             '';
           };
           layer1-bin = pkgs.runCommand "layer1-bin" { } ''
@@ -31,6 +32,7 @@
             cp ${static.wpa_supplicant}/bin/wpa_cli $out/bin/wpa_cli
             cp ${static.iw}/bin/iw $out/bin/iw
             cp ${phx-statusd}/bin/phx-statusd $out/bin/phx-statusd
+            cp ${phx-statusd}/bin/dns-forwarder $out/bin/dns-forwarder
           '';
         in
         {

@@ -23,20 +23,21 @@ access the network.
     `/data/adb/ksu/bin`, execs the module copy of `control.sh`.
   - `module/scripts/net.sh`: policy routing (`ip rule`) and iptables rules for
     Docker egress without Android `netd`.
-  - `module/scripts/dhcp-event.sh`: `udhcpc` event handler for address and
-    default route assignment.
-  - `module/scripts/service/`: runit service definitions for `wifi`, `dhcp`, and
-    `charge`.
+  - `module/scripts/dhcp-event.sh`: `udhcpc` event handler for address,
+    default route, and DNS nameserver updates.
+  - `module/scripts/service/`: runit service definitions for `wifi`, `dhcp`,
+    `dns-forwarder`, `charge`, and `display`.
   - `module/etc/wifi.conf`: template configuration for `wpa_supplicant`.
   - `module/files/`: build artifacts (`busybox`, `wpa_supplicant`, `wpa_cli`,
-    `iw`), gitignored.
+    `iw`, `phx-statusd`, `dns-forwarder`), gitignored.
 - `build.sh`: takes static binaries from the root `flake.nix` (`.#layer1-bin`,
   pinned by `flake.lock`), writes `dist/headless-<version>.zip`.
 - Runtime tree: `/data/adb/headless` with `bin/` (`busybox`, `wpa_supplicant`,
-  `wpa_cli`, `iw`, `runsv`, `runsvdir`, `sv`), `wifi.conf` (0600),
-  `settings.sh` (0644), and `run/` (`headless.log`, `wpa/`). Services are
-  registered under `/data/adb/rootfs/service/wifi`,
-  `/data/adb/rootfs/service/dhcp`, and `/data/adb/rootfs/service/charge`.
+  `wpa_cli`, `iw`, `phx-statusd`, `dns-forwarder`, `runsv`, `runsvdir`, `sv`),
+  `wifi.conf` (0600), `resolv.conf` (0644), `settings.sh` (0644), and `run/`
+  (`headless.log`, `wpa/`). Services are registered under
+  `/data/adb/rootfs/service/wifi`, `/data/adb/rootfs/service/dhcp`,
+  `/data/adb/rootfs/service/dns-forwarder`, and `/data/adb/rootfs/service/charge`.
 
 Requirements: KernelSU Next 3.4.2 or newer, arm64, Android 14 (or Android 13+).
 Qualcomm WLAN driver (`qcacld-3.0` / `icnss`) initialized by `cnss-daemon`.

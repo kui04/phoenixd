@@ -26,7 +26,7 @@ fi
 mkdir -p "${BIN_DIR}" "${HEADLESS_DIR}/run"
 
 ui_print '- Installing binaries'
-for name in busybox wpa_supplicant wpa_cli iw phx-statusd; do
+for name in busybox wpa_supplicant wpa_cli iw phx-statusd dns-forwarder; do
   cp -f "${MODPATH}/files/${name}" "${BIN_DIR}/${name}" \
     || abort "! Failed to install ${name}"
   chmod 755 "${BIN_DIR}/${name}"

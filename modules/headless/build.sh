@@ -10,7 +10,7 @@ readonly ROOT_DIR
 readonly MODULE_DIR="${ROOT_DIR}/module"
 readonly FILES_DIR="${MODULE_DIR}/files"
 readonly DIST_DIR="${ROOT_DIR}/dist"
-readonly BINARIES=(busybox wpa_supplicant wpa_cli iw phx-statusd)
+readonly BINARIES=(busybox wpa_supplicant wpa_cli iw phx-statusd dns-forwarder)
 
 #######################################
 # Copy the static binaries from the Nix flake into files/.

@@ -61,7 +61,8 @@
     "default_domain_resolver": {
       "server": "dns-local"
     },
-    "auto_detect_interface": true,
+    "auto_detect_interface": false,
+    "default_interface": "wlan0",
     "rules": [
       {
         "action": "sniff"
