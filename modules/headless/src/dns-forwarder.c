@@ -12,13 +12,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/random.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
 
 #define DNS_PORT 53
-#define BUFFER_SIZE 2048
+#define BUFFER_SIZE 4096
 #define MAX_SESSIONS 1024
 #define MAX_UPSTREAMS 8
 #define SESSION_TIMEOUT_SEC 5
@@ -34,13 +35,13 @@ struct session {
     struct sockaddr_in client_addr;
     time_t expire_at;
     uint16_t client_id;
+    uint16_t upstream_id;
     bool active;
 };
 
 static volatile sig_atomic_t g_running = 1;
 static volatile sig_atomic_t g_reload = 0;
 
-static uint16_t g_session_seq = 0;
 static struct session g_sessions[MAX_SESSIONS];
 
 static void handle_signal(int sig) {
@@ -49,6 +50,28 @@ static void handle_signal(int sig) {
     } else {
         g_running = 0;
     }
+}
+
+static uint16_t generate_txid(void) {
+    uint16_t val = 0;
+    if (getrandom(&val, sizeof(val), GRND_NONBLOCK) == sizeof(val) && val != 0) {
+        return val;
+    }
+
+    static unsigned int seed = 0;
+    if (seed == 0) {
+        seed = (unsigned int)(time(NULL) ^ ((unsigned int)getpid() << 16));
+        int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
+        if (fd >= 0) {
+            unsigned int urand_val = 0;
+            if (read(fd, &urand_val, sizeof(urand_val)) == sizeof(urand_val)) {
+                seed ^= urand_val;
+            }
+            close(fd);
+        }
+    }
+    val = (uint16_t)rand_r(&seed);
+    return (val == 0) ? 1 : val;
 }
 
 static int add_upstream(struct upstream_server* servers, int count, int max, const char* ip) {
@@ -83,6 +106,7 @@ static int add_upstream(struct upstream_server* servers, int count, int max, con
 
 static int load_upstream_servers(const char* path, struct upstream_server* servers, int max) {
     int count = 0;
+    memset(servers, 0, sizeof(struct upstream_server) * (size_t)max);
 
     if (path != NULL) {
         FILE* fp = fopen(path, "r");
@@ -127,15 +151,19 @@ static int load_upstream_servers(const char* path, struct upstream_server* serve
     return count;
 }
 
-static int alloc_session(const struct sockaddr_in* client_addr, uint16_t client_id, time_t now) {
-    for (int i = 0; i < MAX_SESSIONS; i++) {
-        uint16_t idx = (g_session_seq++) % MAX_SESSIONS;
+static int alloc_session(const struct sockaddr_in* client_addr, uint16_t client_id,
+                         uint16_t* out_txid, time_t now) {
+    for (int attempt = 0; attempt < 32; attempt++) {
+        uint16_t txid = generate_txid();
+        uint16_t idx = (uint16_t)(txid % MAX_SESSIONS);
         if (!g_sessions[idx].active || now > g_sessions[idx].expire_at) {
             g_sessions[idx].client_addr = *client_addr;
             g_sessions[idx].client_id = client_id;
+            g_sessions[idx].upstream_id = txid;
             g_sessions[idx].expire_at = now + SESSION_TIMEOUT_SEC;
             g_sessions[idx].active = true;
-            return idx;
+            *out_txid = txid;
+            return (int)idx;
         }
     }
     return -1;
@@ -146,6 +174,7 @@ static void handle_client_query(int client_fd, int upstream_fd,
                                 time_t now) {
     uint8_t buf[BUFFER_SIZE];
     struct sockaddr_in client_addr;
+    memset(&client_addr, 0, sizeof(client_addr));
     socklen_t addr_len = sizeof(client_addr);
 
     ssize_t len =
@@ -160,13 +189,14 @@ static void handle_client_query(int client_fd, int upstream_fd,
     }
 
     uint16_t client_id = (uint16_t)(((uint16_t)buf[0] << 8) | (uint16_t)buf[1]);
-    int idx = alloc_session(&client_addr, client_id, now);
+    uint16_t txid = 0;
+    int idx = alloc_session(&client_addr, client_id, &txid, now);
     if (idx < 0) {
         return;
     }
 
-    buf[0] = (uint8_t)(((uint16_t)idx >> 8) & 0xff);
-    buf[1] = (uint8_t)((uint16_t)idx & 0xff);
+    buf[0] = (uint8_t)((txid >> 8) & 0xff);
+    buf[1] = (uint8_t)(txid & 0xff);
 
     for (int i = 0; i < server_count; i++) {
         sendto(upstream_fd, buf, (size_t)len, 0, (const struct sockaddr*)&servers[i].addr,
@@ -174,9 +204,12 @@ static void handle_client_query(int client_fd, int upstream_fd,
     }
 }
 
-static void handle_upstream_response(int client_fd, int upstream_fd, time_t now) {
+static void handle_upstream_response(int client_fd, int upstream_fd,
+                                     const struct upstream_server* servers, int server_count,
+                                     time_t now) {
     uint8_t buf[BUFFER_SIZE];
     struct sockaddr_in from_addr;
+    memset(&from_addr, 0, sizeof(from_addr));
     socklen_t addr_len = sizeof(from_addr);
 
     ssize_t len =
@@ -185,8 +218,30 @@ static void handle_upstream_response(int client_fd, int upstream_fd, time_t now)
         return;
     }
 
-    uint16_t idx = (uint16_t)(((uint16_t)buf[0] << 8) | (uint16_t)buf[1]);
-    if (idx >= MAX_SESSIONS || !g_sessions[idx].active || now > g_sessions[idx].expire_at) {
+    /* Only process responses (QR flag == 1) */
+    if ((buf[2] & 0x80) == 0) {
+        return;
+    }
+
+    /* Validate that sender is one of the configured upstream servers */
+    if (from_addr.sin_port != htons(DNS_PORT)) {
+        return;
+    }
+    bool server_matched = false;
+    for (int i = 0; i < server_count; i++) {
+        if (servers[i].addr.sin_addr.s_addr == from_addr.sin_addr.s_addr) {
+            server_matched = true;
+            break;
+        }
+    }
+    if (!server_matched) {
+        return;
+    }
+
+    uint16_t txid = (uint16_t)(((uint16_t)buf[0] << 8) | (uint16_t)buf[1]);
+    uint16_t idx = (uint16_t)(txid % MAX_SESSIONS);
+    if (!g_sessions[idx].active || g_sessions[idx].upstream_id != txid ||
+        now > g_sessions[idx].expire_at) {
         return;
     }
 
@@ -271,7 +326,7 @@ int main(int argc, char** argv) {
         }
 
         if ((fds[1].revents & POLLIN) != 0) {
-            handle_upstream_response(client_fd, upstream_fd, now);
+            handle_upstream_response(client_fd, upstream_fd, servers, server_count, now);
         }
     }
 

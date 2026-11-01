@@ -31,7 +31,7 @@ for name in busybox wpa_supplicant wpa_cli iw phx-statusd dns-forwarder; do
     || abort "! Failed to install ${name}"
   chmod 755 "${BIN_DIR}/${name}"
 done
-for name in runsv runsvdir sv; do
+for name in runsv runsvdir sv pkill; do
   ln -sf busybox "${BIN_DIR}/${name}"
 done
 rm -rf "${MODPATH}/files"

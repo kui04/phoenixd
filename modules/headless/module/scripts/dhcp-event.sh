@@ -23,17 +23,16 @@ update_dns() {
   } >"${HEADLESS_DIR}/resolv.conf.tmp"
   mv -f "${HEADLESS_DIR}/resolv.conf.tmp" "${HEADLESS_DIR}/resolv.conf"
 
+  if [ -w /etc/resolv.conf ]; then
+    cp -f "${HEADLESS_DIR}/resolv.conf" /etc/resolv.conf 2>/dev/null || true
+  fi
   if [ -d /data/adb/rootfs/etc ]; then
     cp -f "${HEADLESS_DIR}/resolv.conf" \
       /data/adb/rootfs/etc/resolv.conf 2>/dev/null || true
   fi
-  if [ -d /data/adb/rootfs/mnt/etc ]; then
-    cp -f "${HEADLESS_DIR}/resolv.conf" \
-      /data/adb/rootfs/mnt/etc/resolv.conf 2>/dev/null || true
-  fi
 
   sv hup "${SERVICE_DIR}/dns-forwarder" >/dev/null 2>&1 \
-    || pkill -HUP dns-forwarder 2>/dev/null || true
+    || busybox pkill -HUP dns-forwarder 2>/dev/null || true
 }
 
 # udhcpc sets interface, ip, mask and router.

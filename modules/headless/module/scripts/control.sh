@@ -148,7 +148,7 @@ start_supervisor() {
 #######################################
 stop_supervisor() {
   local i name
-  for name in wifi dhcp dns-forwarder charge display; do
+  for name in wifi dhcp dns-forwarder dnsd charge display; do
     if [ -d "${SERVICE_DIR}/${name}" ]; then
       touch "${SERVICE_DIR}/${name}/down"
       sv -w 5 down "${SERVICE_DIR}/${name}" >/dev/null 2>&1
@@ -161,8 +161,8 @@ stop_supervisor() {
     i=$(( i + 1 ))
   done
   rm -rf "${SERVICE_DIR}/wifi" "${SERVICE_DIR}/dhcp" \
-    "${SERVICE_DIR}/dns-forwarder" "${SERVICE_DIR}/charge" \
-    "${SERVICE_DIR}/display"
+    "${SERVICE_DIR}/dns-forwarder" "${SERVICE_DIR}/dnsd" \
+    "${SERVICE_DIR}/charge" "${SERVICE_DIR}/display"
 }
 
 #######################################
@@ -210,7 +210,11 @@ restore_android() {
     sleep 1
   done
   if [ -e /dev/socket/dnsproxyd.netd ]; then
-    mv -f /dev/socket/dnsproxyd.netd /dev/socket/dnsproxyd 2>/dev/null || true
+    if [ ! -e /dev/socket/dnsproxyd ]; then
+      mv -f /dev/socket/dnsproxyd.netd /dev/socket/dnsproxyd 2>/dev/null || true
+    else
+      rm -f /dev/socket/dnsproxyd.netd 2>/dev/null || true
+    fi
   fi
   start_services ${ANDROID_SERVICES} ${WIFI_SERVICES}
   echo headless_lock >/sys/power/wake_unlock 2>/dev/null
@@ -271,12 +275,12 @@ start_headless() {
     i=$(( i + 1 ))
     sleep 1
   done
-  if [ -e /dev/socket/dnsproxyd ]; then
-    mv -f /dev/socket/dnsproxyd /dev/socket/dnsproxyd.netd 2>/dev/null || true
-  fi
   sh "${MODDIR}/scripts/net.sh" add
   ip link set "${WIFI_IFACE}" up
   start_supervisor
+  if [ -e /dev/socket/dnsproxyd ]; then
+    mv -f /dev/socket/dnsproxyd /dev/socket/dnsproxyd.netd 2>/dev/null || true
+  fi
   if wait_network; then
     sh "${MODDIR}/scripts/net.sh" add
     echo 'headless started'
