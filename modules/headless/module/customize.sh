@@ -26,7 +26,7 @@ fi
 mkdir -p "${BIN_DIR}" "${HEADLESS_DIR}/run"
 
 ui_print '- Installing binaries'
-for name in busybox wpa_supplicant wpa_cli iw; do
+for name in busybox wpa_supplicant wpa_cli iw phx-statusd; do
   cp -f "${MODPATH}/files/${name}" "${BIN_DIR}/${name}" \
     || abort "! Failed to install ${name}"
   chmod 755 "${BIN_DIR}/${name}"
@@ -38,6 +38,21 @@ rm -rf "${MODPATH}/files"
 
 if [ ! -f "${HEADLESS_DIR}/settings.sh" ]; then
   cp -f "${MODPATH}/scripts/settings.sh" "${HEADLESS_DIR}/settings.sh"
+else
+  if ! grep -q 'vendor\.hwcomposer' "${HEADLESS_DIR}/settings.sh"; then
+    ui_print '- Migrating settings.sh for hwcomposer service'
+    sed -i 's/mediametrics/mediametrics vendor.hwcomposer-2-4/' \
+      "${HEADLESS_DIR}/settings.sh" 2>/dev/null || true
+  fi
+  if ! grep -q 'DISPLAY_ENABLED' "${HEADLESS_DIR}/settings.sh"; then
+    ui_print '- Migrating settings.sh for display support'
+    printf '\n' >>"${HEADLESS_DIR}/settings.sh"
+    cat <<'EOF' >>"${HEADLESS_DIR}/settings.sh"
+DISPLAY_ENABLED='1'
+DISPLAY_TIMEOUT='30'
+DISPLAY_BRIGHTNESS='1024'
+EOF
+  fi
 fi
 if [ ! -f "${HEADLESS_DIR}/wifi.conf" ]; then
   cp -f "${MODPATH}/etc/wifi.conf" "${HEADLESS_DIR}/wifi.conf"

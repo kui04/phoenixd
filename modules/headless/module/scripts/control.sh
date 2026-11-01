@@ -37,7 +37,8 @@ service_locked() {
   local lock
   for lock in "${SERVICE_DIR}/wifi/supervise/lock" \
     "${SERVICE_DIR}/dhcp/supervise/lock" \
-    "${SERVICE_DIR}/charge/supervise/lock"; do
+    "${SERVICE_DIR}/charge/supervise/lock" \
+    "${SERVICE_DIR}/display/supervise/lock"; do
     [ -e "${lock}" ] || continue
     busybox flock -n "${lock}" true 2>/dev/null || return 0
   done
@@ -109,6 +110,7 @@ start_supervisor() {
   local i name svcs
   svcs='wifi dhcp'
   [ "${CHARGE_CONTROL}" = 1 ] && svcs="${svcs} charge"
+  [ "${DISPLAY_ENABLED}" = 1 ] && svcs="${svcs} display"
   sh /data/adb/modules/rootfs/scripts/control.sh start >/dev/null 2>&1
   mkdir -p "${SERVICE_DIR}"
   for name in ${svcs}; do
@@ -139,7 +141,7 @@ start_supervisor() {
 #######################################
 stop_supervisor() {
   local i name
-  for name in wifi dhcp charge; do
+  for name in wifi dhcp charge display; do
     if [ -d "${SERVICE_DIR}/${name}" ]; then
       touch "${SERVICE_DIR}/${name}/down"
       sv -w 5 down "${SERVICE_DIR}/${name}" >/dev/null 2>&1
@@ -151,7 +153,8 @@ stop_supervisor() {
     sleep 1
     i=$(( i + 1 ))
   done
-  rm -rf "${SERVICE_DIR}/wifi" "${SERVICE_DIR}/dhcp" "${SERVICE_DIR}/charge"
+  rm -rf "${SERVICE_DIR}/wifi" "${SERVICE_DIR}/dhcp" \
+    "${SERVICE_DIR}/charge" "${SERVICE_DIR}/display"
 }
 
 #######################################
@@ -183,11 +186,24 @@ wait_network() {
 #######################################
 restore_android() {
   local i=0
+  local state=''
   log 'restoring Android services'
   set_charge_state 0
   set_fast_charge 1
+  echo 0 >/sys/class/backlight/panel0-backlight/bl_power 2>/dev/null
+  echo 2048 >/sys/class/backlight/panel0-backlight/brightness 2>/dev/null
+  start vendor.hwcomposer-2-4 2>/dev/null
+  while [ "${i}" -lt 30 ]; do
+    state="$(getprop init.svc.vendor.hwcomposer-2-4)"
+    if [ -z "${state}" ] || [ "${state}" = 'running' ]; then
+      break
+    fi
+    i=$(( i + 1 ))
+    sleep 1
+  done
   start_services ${ANDROID_SERVICES} ${WIFI_SERVICES}
   echo headless_lock >/sys/power/wake_unlock 2>/dev/null
+  i=0
   while [ "${i}" -lt 60 ]; do
     cmd -l 2>/dev/null | grep -q '^wifi$' && break
     i=$(( i + 1 ))
@@ -212,6 +228,8 @@ restore_android() {
 #   1 if the module is not configured or the network does not come up.
 #######################################
 start_headless() {
+  local i=0
+  local state=''
   if is_running; then
     echo 'headless already running'
     exit 0
@@ -231,8 +249,17 @@ start_headless() {
   fi
   log 'stopping Android'
   echo headless_lock >/sys/power/wake_lock
+  stop vendor.hwcomposer-2-4 2>/dev/null
   stop_services ${WIFI_SERVICES}
   stop_services ${ANDROID_SERVICES}
+  while [ "${i}" -lt 30 ]; do
+    state="$(getprop init.svc.vendor.hwcomposer-2-4)"
+    if [ -z "${state}" ] || [ "${state}" = 'stopped' ]; then
+      break
+    fi
+    i=$(( i + 1 ))
+    sleep 1
+  done
   ip link set "${WIFI_IFACE}" up
   start_supervisor
   if wait_network; then
@@ -310,6 +337,7 @@ show_status() {
   echo 'headless running'
   svcs="${SERVICE_DIR}/wifi ${SERVICE_DIR}/dhcp"
   [ -d "${SERVICE_DIR}/charge" ] && svcs="${svcs} ${SERVICE_DIR}/charge"
+  [ -d "${SERVICE_DIR}/display" ] && svcs="${svcs} ${SERVICE_DIR}/display"
   sv status ${svcs} 2>/dev/null
   ip -br addr show dev "${WIFI_IFACE}"
   show_battery

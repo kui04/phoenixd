@@ -20,7 +20,8 @@ export PATH
 : "${WIFI_TIMEOUT:=60}"
 : "${WIFI_SERVICES:=wpa_supplicant wificond vendor.wifi_hal_legacy}"
 : "${ANDROID_SERVICES:=zygote zygote_secondary surfaceflinger audioserver \
-cameraserver media mediaextractor media.swcodec mediametrics}"
+cameraserver media mediaextractor media.swcodec mediametrics \
+vendor.hwcomposer-2-4}"
 : "${DOCKER_BRIDGE:=docker0}"
 : "${DOCKER_SUBNET:=172.17.0.0/16}"
 : "${RULE_PREF:=9500}"
@@ -31,6 +32,9 @@ cameraserver media mediaextractor media.swcodec mediametrics}"
 : "${FAST_CHARGE:=0}"
 : "${CHARGE_RESTRICT_CUR:=1200000}"
 : "${BATTERY_DIR:=/sys/class/power_supply/battery}"
+: "${DISPLAY_ENABLED:=1}"
+: "${DISPLAY_TIMEOUT:=30}"
+: "${DISPLAY_BRIGHTNESS:=1024}"
 
 #######################################
 # Append a time-stamped message to the log file.

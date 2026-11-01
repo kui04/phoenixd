@@ -128,6 +128,29 @@ for f in modules/rootfs/module/*.sh modules/rootfs/module/scripts/*.sh \
 done
 ```
 
+### 4. C Code Formatting (`clang-format`)
+
+Format and verify C source code according to `.clang-format`:
+
+```bash
+# Check C formatting
+nix shell nixpkgs#clang-tools -c clang-format --dry-run -Werror \
+  modules/headless/src/*.[ch]
+
+# Format C files in-place
+nix shell nixpkgs#clang-tools -c clang-format -i \
+  modules/headless/src/*.[ch]
+```
+
+### 5. C Static Analysis (`clang-tidy`)
+
+Run static analysis on C source code using `.clang-tidy`:
+
+```bash
+nix shell nixpkgs#clang-tools -c clang-tidy modules/headless/src/*.c -- \
+  -I modules/headless/src -std=c11 -D_GNU_SOURCE
+```
+
 ## Operational Boundaries
 
 - **Git Commit Boundary**: Never stage or commit changes without explicit user approval.
