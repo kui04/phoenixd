@@ -36,7 +36,8 @@ is_running() {
 service_locked() {
   local lock
   for lock in "${SERVICE_DIR}/wifi/supervise/lock" \
-    "${SERVICE_DIR}/dhcp/supervise/lock"; do
+    "${SERVICE_DIR}/dhcp/supervise/lock" \
+    "${SERVICE_DIR}/charge/supervise/lock"; do
     [ -e "${lock}" ] || continue
     busybox flock -n "${lock}" true 2>/dev/null || return 0
   done
@@ -99,15 +100,18 @@ start_services() {
 #######################################
 # Register and start Wi-Fi and DHCP services under runsvdir.
 # Globals:
+#   CHARGE_CONTROL
 #   LOG_FILE
 #   MODDIR
 #   SERVICE_DIR
 #######################################
 start_supervisor() {
-  local i name
+  local i name svcs
+  svcs='wifi dhcp'
+  [ "${CHARGE_CONTROL}" = 1 ] && svcs="${svcs} charge"
   sh /data/adb/modules/rootfs/scripts/control.sh start >/dev/null 2>&1
   mkdir -p "${SERVICE_DIR}"
-  for name in wifi dhcp; do
+  for name in ${svcs}; do
     mkdir -p "${SERVICE_DIR}/${name}"
     rm -f "${SERVICE_DIR}/${name}/run" "${SERVICE_DIR}/${name}/down"
     {
@@ -117,7 +121,7 @@ start_supervisor() {
     } >"${SERVICE_DIR}/${name}/run"
     chmod 755 "${SERVICE_DIR}/${name}/run"
   done
-  for name in wifi dhcp; do
+  for name in ${svcs}; do
     i=0
     while [ "${i}" -lt 10 ]; do
       [ -e "${SERVICE_DIR}/${name}/supervise/ok" ] && break
@@ -135,7 +139,7 @@ start_supervisor() {
 #######################################
 stop_supervisor() {
   local i name
-  for name in wifi dhcp; do
+  for name in wifi dhcp charge; do
     if [ -d "${SERVICE_DIR}/${name}" ]; then
       touch "${SERVICE_DIR}/${name}/down"
       sv -w 5 down "${SERVICE_DIR}/${name}" >/dev/null 2>&1
@@ -147,7 +151,7 @@ stop_supervisor() {
     sleep 1
     i=$(( i + 1 ))
   done
-  rm -rf "${SERVICE_DIR}/wifi" "${SERVICE_DIR}/dhcp"
+  rm -rf "${SERVICE_DIR}/wifi" "${SERVICE_DIR}/dhcp" "${SERVICE_DIR}/charge"
 }
 
 #######################################
@@ -180,6 +184,8 @@ wait_network() {
 restore_android() {
   local i=0
   log 'restoring Android services'
+  set_charge_state 0
+  set_fast_charge 1
   start_services ${ANDROID_SERVICES} ${WIFI_SERVICES}
   echo headless_lock >/sys/power/wake_unlock 2>/dev/null
   while [ "${i}" -lt 60 ]; do
@@ -251,10 +257,39 @@ start_headless() {
 stop_headless() {
   touch "${DISABLED_FILE}"
   stop_supervisor
+  set_charge_state 0
+  set_fast_charge 1
   sh "${MODDIR}/scripts/net.sh" del
   ip addr flush dev "${WIFI_IFACE}" 2>/dev/null
   restore_android
   echo 'headless stopped'
+}
+
+#######################################
+# Print battery and charge control status.
+# Globals:
+#   BATTERY_DIR
+#######################################
+show_battery() {
+  local cap fast stat susp
+  [ -d "${BATTERY_DIR}" ] || return 0
+  cap="$(cat "${BATTERY_DIR}/capacity" 2>/dev/null)"
+  stat="$(cat "${BATTERY_DIR}/status" 2>/dev/null)"
+  if is_suspended; then
+    susp='suspended'
+  else
+    susp='allowed'
+  fi
+  if [ -f /sys/class/qcom-battery/restrict_chg ] \
+    && [ "$(cat /sys/class/qcom-battery/restrict_chg 2>/dev/null)" = 1 ]; then
+    fast='slow'
+  elif [ -f "${BATTERY_DIR}/slowly_charging" ] \
+    && [ "$(cat "${BATTERY_DIR}/slowly_charging" 2>/dev/null)" = 1 ]; then
+    fast='slow'
+  else
+    fast='normal'
+  fi
+  echo "battery: ${cap}% (${stat}, charge: ${susp}, speed: ${fast})"
 }
 
 #######################################
@@ -266,13 +301,18 @@ stop_headless() {
 #   1 if Wi-Fi services do not run.
 #######################################
 show_status() {
+  local svcs
   if ! is_running; then
     echo 'headless stopped'
+    show_battery
     return 1
   fi
   echo 'headless running'
-  sv status "${SERVICE_DIR}/wifi" "${SERVICE_DIR}/dhcp" 2>/dev/null
+  svcs="${SERVICE_DIR}/wifi ${SERVICE_DIR}/dhcp"
+  [ -d "${SERVICE_DIR}/charge" ] && svcs="${svcs} ${SERVICE_DIR}/charge"
+  sv status ${svcs} 2>/dev/null
   ip -br addr show dev "${WIFI_IFACE}"
+  show_battery
 }
 
 #######################################
