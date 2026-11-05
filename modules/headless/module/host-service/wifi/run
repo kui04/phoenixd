@@ -1,0 +1,59 @@
+#!/system/bin/sh
+# Supervises wlan0 for the headless server. Android's own stack must be off:
+# two supplicants share the interface and inbound frames go unanswered.
+ROOTFS_HOME="${ROOTFS_HOME:-/data/adb/rootfs}"
+MODDIR="${MODDIR:-/data/adb/modules/headless}"
+. "${MODDIR}/scripts/common.sh"
+
+IW="${BIN_DIR}/iw"
+WPA="${BIN_DIR}/wpa_supplicant"
+HELPER="${MODDIR}/host-service/wifi/dhcp.sh"
+export ROOTFS_HOME MODDIR
+
+exec >>"${RUN_DIR}/wifi.log" 2>&1
+for service in ${WIFI_SERVICES}; do
+  stop "${service}" >/dev/null 2>&1
+done
+[ -x "${IW}" ] && "${IW}" dev "${WIFI_IFACE}" set power_save off 2>/dev/null
+if [ ! -x "${WPA}" ] || [ ! -f "${WIFI_CONF}" ]; then
+  log 'wpa_supplicant or wifi.conf is missing'
+  sleep 30
+  exit 1
+fi
+# Android or a previous lease can leave an address behind, and udhcpc only
+# replaces the one it owns, so the interface is flushed at handover.
+ip addr flush dev "${WIFI_IFACE}" 2>/dev/null
+mkdir -p "${RUN_DIR}/wpa"
+log "wifi service started, pid $$"
+log 'starting udhcpc'
+# wpa_supplicant must not replace this shell with exec: runsv signals only
+# the run process, so the shell has to own both children to stop them.
+udhcpc_pid=
+wpa_pid=
+
+#######################################
+# Stop both children before the service exits. runsv signals only this
+# script, so an unkilled child would be reparented and keep running.
+#######################################
+stop_children() {
+  local pid
+  for pid in "${udhcpc_pid}" "${wpa_pid}"; do
+    [ -n "${pid}" ] || continue
+    kill "${pid}" 2>/dev/null
+  done
+  for pid in "${udhcpc_pid}" "${wpa_pid}"; do
+    [ -n "${pid}" ] || continue
+    wait "${pid}" 2>/dev/null
+  done
+}
+
+trap stop_children EXIT
+trap 'exit 0' TERM INT
+# No -R: a DHCPRELEASE from a stopping instance can erase the address of the
+# next one, because runsv kills this script and the release lands late. udhcpc
+# handles SIGTERM without a release, so the trap above keeps that behaviour.
+"${BIN_DIR}/busybox" udhcpc -i "${WIFI_IFACE}" -f -s "${HELPER}" &
+udhcpc_pid=$!
+"${WPA}" -i "${WIFI_IFACE}" -D nl80211 -c "${WIFI_CONF}" &
+wpa_pid=$!
+wait "${wpa_pid}"

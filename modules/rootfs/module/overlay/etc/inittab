@@ -1,0 +1,6 @@
+# BusyBox init. OpenRC owns the runlevels. There is no getty and no
+# ctrl-alt-del, because Layer 1 runs headless.
+::sysinit:/sbin/openrc sysinit
+::sysinit:/sbin/openrc boot
+::wait:/sbin/openrc default
+::shutdown:/sbin/openrc shutdown

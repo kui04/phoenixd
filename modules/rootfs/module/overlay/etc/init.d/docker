@@ -1,0 +1,83 @@
+#!/sbin/openrc-run
+supervisor=supervise-daemon
+
+name="Docker Daemon"
+description="Persistent process that manages docker containers"
+description_reload="Reload configuration without exiting"
+
+command="${DOCKERD_BINARY:-/usr/bin/dockerd}"
+command_args="${DOCKER_OPTS}"
+
+DOCKER_LOGFILE="${DOCKER_LOGFILE:-/var/log/${RC_SVCNAME}.log}"
+DOCKER_ERRFILE="${DOCKER_ERRFILE:-${DOCKER_LOGFILE}}"
+DOCKER_OUTFILE="${DOCKER_OUTFILE:-${DOCKER_LOGFILE}}"
+if [ "${DOCKER_ERRFILE}" = "${DOCKER_OUTFILE}" ]; then
+  LOGPROXY_OPTS="${LOGPROXY_OPTS} -m"
+fi
+export \
+  LOGPROXY_CHMOD="${LOGPROXY_CHMOD:-0644}" \
+  LOGPROXY_LOG_DIRECTORY="${LOGPROXY_LOG_DIRECTORY:-/var/log}" \
+  LOGPROXY_ROTATION_SIZE="${LOGPROXY_ROTATION_SIZE:-104857600}" \
+  LOGPROXY_ROTATION_TIME="${LOGPROXY_ROTATION_TIME:-86400}" \
+  LOGPROXY_ROTATION_SUFFIX="${LOGPROXY_ROTATION_SUFFIX:-.%Y%m%d%H%M%S}" \
+  LOGPROXY_ROTATED_FILES="${LOGPROXY_ROTATED_FILES:-5}"
+
+output_logger="log_proxy ${LOGPROXY_OPTS} ${DOCKER_OUTFILE}"
+error_logger="log_proxy ${LOGPROXY_OPTS} ${DOCKER_ERRFILE}"
+
+extra_started_commands="reload"
+
+rc_ulimit="${DOCKER_ULIMIT:--c unlimited -n 1048576 -u unlimited}"
+
+retry="${DOCKER_RETRY:-TERM/60/KILL/10}"
+
+if [ -e /etc/profile.d/proxy.sh ]; then
+  . /etc/profile.d/proxy.sh
+fi
+
+# Layer 1: the veth peer comes from Layer 0, and the address belongs to the
+# net service. sysfs and cgroups are already mounted by the launcher, and the
+# cgroups service carries keyword -docker.
+depend() {
+  need net
+  after firewall
+}
+
+start_pre() {
+  checkpath -f -m 0644 -o root:docker "${DOCKER_ERRFILE}" "${DOCKER_OUTFILE}"
+  # A containerd of an earlier Layer 1 keeps an exclusive flock on the bolt
+  # metadata, and this one would block in its bolt open. Fail fast instead of
+  # spinning, so the error is visible.
+  meta=/var/lib/docker/containerd/daemon/io.containerd.metadata.v1.bolt/meta.db
+  if [ -e "${meta}" ] && ! flock -n "${meta}" true 2>/dev/null; then
+    eerror "a containerd of an earlier Layer 1 holds ${meta}"
+    return 1
+  fi
+  # A killed Layer 1 leaves task state below containerd's root, and containerd
+  # then spends its start on a task it can never clean. Only the task state is
+  # dropped: the containerd index stays, so its start stays fast. Images and
+  # containers live in the overlay2 store and stay untouched.
+  rm -rf /var/lib/docker/containerd/daemon/io.containerd.runtime.v2.task/moby
+  return 0
+}
+
+start_post() {
+  local count=0
+  ebegin "Waiting for the Docker socket"
+  while [ "${count}" -lt 180 ]; do
+    if docker info >/dev/null 2>&1; then
+      eend 0
+      return 0
+    fi
+    sleep 1
+    count=$((count + 1))
+  done
+  eend 1 "the daemon did not answer within 180 seconds"
+  return 1
+}
+
+reload() {
+  ebegin "Reloading configuration"
+  ${supervisor} ${RC_SVCNAME} --signal HUP
+  eend $?
+}

@@ -1,0 +1,129 @@
+#!/system/bin/sh
+# Runs sing-box in the foreground under the host runsvdir. Layer 1 and the
+# headless services do not depend on it: without the proxy, Layer 1 egress
+# falls through table 9500 to the WAN.
+ROOTFS_HOME="${ROOTFS_HOME:-/data/adb/rootfs}"
+SINGBOX_DIR=/data/adb/singbox
+BIN="${SINGBOX_DIR}/bin/sing-box"
+CONF="${SINGBOX_DIR}/config.json"
+STATE="${SINGBOX_DIR}/run"
+LOCKDIR="${ROOTFS_HOME}/run/singbox.lock.d"
+readonly BIN CONF LOCKDIR ROOTFS_HOME SINGBOX_DIR STATE
+
+mkdir -p "${ROOTFS_HOME}/run"
+exec >>"${ROOTFS_HOME}/run/singbox.log" 2>&1
+if [ ! -x "${BIN}" ] || [ ! -f "${CONF}" ]; then
+  echo 'sing-box or its config is missing, reinstall the module' >&2
+  sleep 30
+  exit 1
+fi
+mkdir -p "${STATE}"
+
+#######################################
+# Run only one instance. A restart that overlaps its predecessor leaves a
+# second process that fails with TUNSETIFF: device or resource busy, and each
+# instance adds its own copy of the routing rules.
+#######################################
+acquire_lock() {
+  local count=0 pid
+  while ! mkdir "${LOCKDIR}" 2>/dev/null; do
+    pid="$(cat "${LOCKDIR}/pid" 2>/dev/null)"
+    if [ -n "${pid}" ] && ! kill -0 "${pid}" 2>/dev/null; then
+      rm -rf "${LOCKDIR}"
+      continue
+    fi
+    sleep 1
+    count=$(( count + 1 ))
+    if [ "${count}" -ge 30 ]; then
+      echo 'another sing-box instance holds the lock, giving up' >&2
+      return 1
+    fi
+  done
+  echo "$$" >"${LOCKDIR}/pid"
+}
+
+release_lock() {
+  rm -rf "${LOCKDIR}"
+}
+
+acquire_lock || exit 1
+trap release_lock EXIT
+trap 'exit 0' TERM INT
+echo "singbox service started, pid $$"
+
+#######################################
+# Wait until wlan0 has an address and a default route. auto_route installs
+# its rules from the gateway, so a proxy that starts earlier installs none.
+#######################################
+wait_for_wan() {
+  local count=0
+  while [ "${count}" -lt 45 ]; do
+    if ip -4 -o addr show wlan0 2>/dev/null | grep -q ' inet ' \
+      && ip route show default 2>/dev/null | grep -q ' dev wlan0'; then
+      return 0
+    fi
+    sleep 2
+    count=$(( count + 1 ))
+  done
+  return 1
+}
+
+#######################################
+# Drop the routing rules that an earlier instance left behind. A killed
+# instance cannot run its own cleanup, and duplicate rules send traffic to a
+# dead device.
+#######################################
+clear_rules() {
+  local pref
+  for pref in 9000 9001 9010; do
+    while ip rule show 2>/dev/null | grep -q "^${pref}:"; do
+      ip rule del pref "${pref}" 2>/dev/null || break
+    done
+  done
+}
+
+#######################################
+# Wait until the tun device of the previous instance is gone. The kernel
+# keeps it until every descriptor is closed.
+#######################################
+wait_for_tun_release() {
+  local count=0
+  while [ "${count}" -lt 15 ]; do
+    ip link show tun0 >/dev/null 2>&1 || return 0
+    sleep 1
+    count=$(( count + 1 ))
+  done
+  return 1
+}
+
+#######################################
+# Run sing-box and restart it when it failed or lost its routing rules. The
+# rules must appear at least once; a run that never installs them is left
+# alone, because restarting it cannot change the configuration.
+#######################################
+while :; do
+  wait_for_wan || echo 'wlan0 has no address and route yet, starting anyway'
+  clear_rules
+  wait_for_tun_release || echo 'tun0 is still busy, starting anyway'
+  "${BIN}" run -D "${STATE}" -c "${CONF}" &
+  child=$!
+  sleep 6
+  had_rules=0
+  if ip rule show 2>/dev/null | grep -q '^9001:'; then
+    had_rules=1
+  else
+    echo 'sing-box installed no routing rules, leaving it alone'
+  fi
+  while kill -0 "${child}" 2>/dev/null; do
+    if [ "${had_rules}" -eq 1 ] \
+      && ! ip rule show 2>/dev/null | grep -q '^9001:'; then
+      echo 'sing-box lost its routing rules, restarting it'
+      kill "${child}" 2>/dev/null
+      break
+    fi
+    sleep 15
+  done
+  wait "${child}" 2>/dev/null
+  clear_rules
+  sleep 5
+done

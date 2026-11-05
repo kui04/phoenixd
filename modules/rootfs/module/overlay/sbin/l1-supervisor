@@ -1,0 +1,17 @@
+#!/bin/sh
+# Runs the OpenRC runlevels and keeps the namespace alive. Layer 1 shares the
+# PID namespace of Android, so there is no init process: this script is the
+# supervisor and stops cleanly on TERM.
+printf '%s\n' "$$" >/run/l1-supervisor.pid 2>/dev/null
+/sbin/openrc sysinit
+/sbin/openrc boot
+/sbin/openrc default
+# The sleep child must die with the supervisor: it inherits the mount
+# namespace, and a live holder keeps the loop device from being released.
+SLEEP_PID=''
+trap 'kill "${SLEEP_PID}" 2>/dev/null; /sbin/openrc shutdown; exit 0' TERM INT
+while :; do
+  sleep 3600 &
+  SLEEP_PID=$!
+  wait "${SLEEP_PID}"
+done

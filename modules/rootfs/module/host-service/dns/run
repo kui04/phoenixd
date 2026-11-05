@@ -1,0 +1,19 @@
+#!/system/bin/sh
+# The Layer 0 DNS forwarder. It binds 10.0.0.1 only, so a host on the LAN
+# cannot use it as an open resolver.
+ROOTFS_HOME="${ROOTFS_HOME:-/data/adb/rootfs}"
+MODDIR="${MODDIR:-/data/adb/modules/rootfs}"
+. "${MODDIR}/scripts/common.sh"
+
+BIN="${ROOTFS_HOME}/bin/dns-forwarder"
+CONF="${ROOTFS_HOME}/host-service/dns/upstreams.conf"
+export ROOTFS_HOME MODDIR
+
+exec >>"${RUN_DIR}/dns.log" 2>&1
+if [ ! -x "${BIN}" ]; then
+  err 'dns-forwarder is missing, reinstall the module'
+  sleep 30
+  exit 1
+fi
+log "dns service started, pid $$"
+exec "${BIN}" "${CONF}" 10.0.0.1

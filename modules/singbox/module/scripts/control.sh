@@ -1,23 +1,21 @@
 #!/system/bin/sh
 #
-# Controls the sing-box daemon: start, stop, restart, status, log, check.
+# Controls the sing-box proxy host service and checks its routing objects.
+# Commands: start, stop, status, log, check. Restart is stop then start.
 #
-# POSIX sh only: KernelSU runs this with Android's /system/bin/sh (mksh) and
-# busybox ash.
+# The service runs under the host runsvdir of modules/rootfs. This module owns
+# only the proxy: Layer 1, the netns, NAT, and table 9500 belong to rootfs.
 
 SINGBOX_DIR=/data/adb/singbox
-BIN="${SINGBOX_DIR}/bin/sing-box"
-CONFIG="${SINGBOX_DIR}/config.json"
-RUN_DIR="${SINGBOX_DIR}/run"
-PID_FILE="${RUN_DIR}/singbox.pid"
-LOG_FILE="${RUN_DIR}/singbox.log"
+ROOTFS_HOME="${ROOTFS_HOME:-/data/adb/rootfs}"
+SERVICE_DIR="${ROOTFS_HOME}/host-service/singbox"
+LOG_FILE="${ROOTFS_HOME}/run/singbox.log"
 BUSYBOX=/data/adb/rootfs/bin/busybox
 [ -x "${BUSYBOX}" ] || BUSYBOX=/data/adb/ksu/bin/busybox
-SERVICE_DIR=/data/adb/rootfs/service/singbox
-readonly BIN BUSYBOX CONFIG LOG_FILE PID_FILE RUN_DIR SERVICE_DIR SINGBOX_DIR
+readonly BUSYBOX LOG_FILE ROOTFS_HOME SERVICE_DIR SINGBOX_DIR
 
 #######################################
-# Print an error message to stderr.
+# Print a message to stderr.
 # Arguments:
 #   Message.
 #######################################
@@ -26,300 +24,188 @@ err() {
 }
 
 #######################################
-# Check whether a process is this module's sing-box.
-# Globals:
-#   BIN
+# Require the host service directory.
+#######################################
+require_service() {
+  if [ ! -d "${SERVICE_DIR}" ]; then
+    err "no host service at ${SERVICE_DIR}, reinstall the module"
+    exit 1
+  fi
+}
+
+#######################################
+# Ensure the host supervisor of modules/rootfs runs. KernelSU starts the
+# module scripts in an undefined order.
+#######################################
+ensure_supervisor() {
+  local control=/data/adb/modules/rootfs/scripts/host.sh
+  [ -f "${control}" ] || return 0
+  if ! "${BUSYBOX}" sv status "${SERVICE_DIR}" >/dev/null 2>&1; then
+    sh "${control}" start >/dev/null 2>&1
+  fi
+}
+
+#######################################
+# Start or stop the service.
 # Arguments:
-#   Process ID.
-# Returns:
-#   0 if the executable is the module binary, 1 otherwise.
+#   sv action.
 #######################################
-is_ours() {
-  local exe
-  exe="$(readlink "/proc/$1/exe" 2>/dev/null)"
-  exe="${exe% (deleted)}"
-  [ "${exe}" = "${BIN}" ]
-}
-
-#######################################
-# Get the active process ID from supervise or pid file.
-# Globals:
-#   PID_FILE
-#   SERVICE_DIR
-# Outputs:
-#   Writes the process ID to stdout.
-#######################################
-get_pid() {
-  local pid=''
-  if [ -f "${SERVICE_DIR}/supervise/pid" ]; then
-    pid="$(cat "${SERVICE_DIR}/supervise/pid" 2>/dev/null)"
-  fi
-  if [ -z "${pid}" ] && [ -f "${PID_FILE}" ]; then
-    pid="$(cat "${PID_FILE}" 2>/dev/null)"
-  fi
-  printf '%s' "${pid}"
-}
-
-#######################################
-# Check whether the pid file names a live sing-box of this module.
-# Globals:
-#   PID_FILE
-#   SERVICE_DIR
-# Returns:
-#   0 if the daemon runs, 1 otherwise.
-#######################################
-is_running() {
-  local pid
-  pid="$(get_pid)"
-  [ -n "${pid}" ] || return 1
-  kill -0 "${pid}" 2>/dev/null || return 1
-  is_ours "${pid}"
-}
-
-#######################################
-# Check for a sing-box of this module without a usable pid file.
-# Returns:
-#   0 if one is alive, 1 otherwise.
-#######################################
-any_daemon_is_ours() {
-  local pid
-  for pid in $(pidof sing-box 2>/dev/null); do
-    is_ours "${pid}" && return 0
-  done
-  return 1
-}
-
-#######################################
-# Validate the config with the binary that will run it.
-# Globals:
-#   BIN
-#   CONFIG
-#   RUN_DIR
-# Returns:
-#   0 if the config loads, 1 otherwise.
-#######################################
-check_config() {
-  if [ ! -f "${CONFIG}" ]; then
-    err "${CONFIG} is missing, reinstall the module"
-    return 1
-  fi
-  mkdir -p "${RUN_DIR}"
-  "${BIN}" check -D "${RUN_DIR}" -c "${CONFIG}"
-}
-
-#######################################
-# Keep the previous run's log as singbox.log.1.
-# Globals:
-#   LOG_FILE
-#######################################
-rotate_log() {
-  if [ -s "${LOG_FILE}" ]; then
-    mv -f "${LOG_FILE}" "${LOG_FILE}.1"
-  fi
-  : >"${LOG_FILE}"
-}
-
-#######################################
-# Wait until the daemon reports that it started.
-# Globals:
-#   LOG_FILE
-#   SERVICE_DIR
-# Returns:
-#   0 if sing-box started, 1 if it exited during the wait.
-#######################################
-wait_started() {
-  local i
-  i=0
-  while [ "${i}" -lt 20 ]; do
-    if is_running; then
-      if grep -q 'sing-box started' "${LOG_FILE}" 2>/dev/null; then
-        return 0
+sv_action() {
+  require_service
+  case "${1}" in
+    start)
+      ensure_supervisor
+      # A previous instance can still hold the tun device and the API port,
+      # and the next one then dies with TUNSETIFF or "address already in use".
+      if ! wait_proxy_release; then
+        kill_leftovers
       fi
-    fi
-    sleep 0.5
-    i=$(( i + 1 ))
-  done
-  is_running
+      ;;
+    restart)
+      ensure_supervisor
+      # `sv restart` starts the new instance before the old one released the
+      # tun device, so sing-box fails with TUNSETIFF: device or resource busy.
+      # Stop, wait for the device to disappear, then start.
+      "${BUSYBOX}" sv -w 15 down "${SERVICE_DIR}" >/dev/null 2>&1
+      # A leftover instance keeps the API port and the tun device, and the new
+      # one then dies with "bind: address already in use" or TUNSETIFF.
+      if ! wait_proxy_release; then
+        kill_leftovers
+      fi
+      "${BUSYBOX}" sv up "${SERVICE_DIR}"
+      return
+      ;;
+  esac
+  "${BUSYBOX}" sv -w 15 "${1}" "${SERVICE_DIR}"
 }
 
 #######################################
-# Start the daemon under runsvdir.
-# Globals:
-#   BIN
-#   BUSYBOX
-#   CONFIG
-#   LOG_FILE
-#   PID_FILE
-#   RUN_DIR
-#   SERVICE_DIR
-# Returns:
-#   1 if the binary, config or startup fails.
+# Report whether something listens on the sing-box API port. Port 9090 is
+# 2382 hex and a listening socket has state 0A in /proc/net/tcp.
 #######################################
-start_daemon() {
-  local i pid
-  if is_running || any_daemon_is_ours; then
-    echo 'sing-box already running'
-    return 0
-  fi
-  if [ ! -x "${BIN}" ]; then
-    err 'sing-box is not installed, reinstall the module'
-    return 1
-  fi
-  if ! check_config; then
-    return 1
-  fi
-  sh /data/adb/modules/rootfs/scripts/control.sh start >/dev/null 2>&1
-  mkdir -p "${RUN_DIR}" "${SERVICE_DIR}"
-  rm -f "${PID_FILE}" "${SERVICE_DIR}/down"
-  rotate_log
-  {
-    printf '#!/system/bin/sh\n'
-    printf 'exec >>"%s" 2>&1\n' "${LOG_FILE}"
-    printf 'exec "%s" run -D "%s" -c "%s"\n' \
-      "${BIN}" "${RUN_DIR}" "${CONFIG}"
-  } >"${SERVICE_DIR}/run"
-  chmod 755 "${SERVICE_DIR}/run"
+api_port_busy() {
+  awk 'NR > 1 && $2 ~ /:2382$/ && $4 == "0A" { found = 1 }
+    END { exit !found }' /proc/net/tcp /proc/net/tcp6 2>/dev/null
+}
 
-  i=0
-  while [ "${i}" -lt 10 ]; do
-    [ -e "${SERVICE_DIR}/supervise/ok" ] && break
-    i=$(( i + 1 ))
+#######################################
+# Wait until the previous instance released the tun device and the API port.
+# The kernel keeps the device until every descriptor is closed.
+#######################################
+wait_proxy_release() {
+  local count=0
+  while [ "${count}" -lt 15 ]; do
+    if ! ip link show tun0 >/dev/null 2>&1 && ! api_port_busy; then
+      return 0
+    fi
     sleep 1
+    count=$(( count + 1 ))
   done
-  "${BUSYBOX}" sv up "${SERVICE_DIR}" >/dev/null 2>&1
-
-  if wait_started; then
-    pid="$(get_pid)"
-    [ -n "${pid}" ] && printf '%s' "${pid}" >"${PID_FILE}"
-    echo "sing-box started (pid ${pid})"
-    return 0
-  fi
-  err "sing-box failed to start, see ${LOG_FILE}"
-  tail -n 20 "${LOG_FILE}"
   return 1
 }
 
 #######################################
-# Terminate every sing-box of this module that is still alive.
+# End the instances that outlived their supervisor. runsv cannot reach them,
+# and they hold the port and the device that the new instance needs.
 #######################################
-kill_ours() {
-  local pid
-  for pid in $(pidof sing-box 2>/dev/null); do
-    is_ours "${pid}" && kill "${pid}" 2>/dev/null
-  done
-  return 0
-}
-
-#######################################
-# Stop the daemon and wait for its cleanup of the tun and iptables rules.
-# Globals:
-#   BUSYBOX
-#   PID_FILE
-#   SERVICE_DIR
-# Outputs:
-#   Writes the result to stdout.
-#######################################
-stop_daemon() {
-  local i pid
-  pid=''
-  if is_running; then
-    pid="$(get_pid)"
-  fi
-  if [ -d "${SERVICE_DIR}" ]; then
-    touch "${SERVICE_DIR}/down"
-    "${BUSYBOX}" sv -w 15 down "${SERVICE_DIR}" >/dev/null 2>&1
-  fi
-  if [ -n "${pid}" ]; then
-    kill "${pid}" 2>/dev/null
-    i=0
-    while kill -0 "${pid}" 2>/dev/null && [ "${i}" -lt 15 ]; do
-      sleep 1
-      i=$(( i + 1 ))
+kill_leftovers() {
+  local child count
+  for count in 1 2; do
+    for child in $("${BUSYBOX}" pgrep -f 'sing-box run -D' 2>/dev/null); do
+      if [ "${count}" -eq 1 ]; then
+        kill -TERM "${child}" 2>/dev/null
+      else
+        kill -KILL "${child}" 2>/dev/null
+      fi
     done
-    if kill -0 "${pid}" 2>/dev/null; then
-      kill -9 "${pid}" 2>/dev/null
-    fi
-  fi
-  kill_ours
-  rm -f "${PID_FILE}"
-  echo 'sing-box stopped'
+    sleep 2
+  done
+  ip link del tun0 2>/dev/null
+  sleep 1
 }
 
 #######################################
-# Print the daemon status.
-# Globals:
-#   BUSYBOX
-#   PID_FILE
-#   SERVICE_DIR
-# Outputs:
-#   Writes the status to stdout.
-# Returns:
-#   1 if the daemon is stopped.
+# Print the state of the service and of the proxy route objects.
 #######################################
 show_status() {
-  local pid
-  if ! is_running; then
-    echo 'sing-box stopped'
-    return 1
-  fi
-  pid="$(get_pid)"
-  echo "sing-box running (pid ${pid})"
+  require_service
   "${BUSYBOX}" sv status "${SERVICE_DIR}" 2>/dev/null
 }
 
 #######################################
-# Print the last lines of the daemon log.
-# Globals:
-#   LOG_FILE
-# Outputs:
-#   Writes the log lines to stdout.
+# Print the last lines of the proxy log.
 # Arguments:
 #   Number of lines, 40 by default.
 #######################################
 show_log() {
   local lines="${1:-40}"
-  [ -f "${LOG_FILE}" ] || return 0
+  if [ ! -f "${LOG_FILE}" ]; then
+    err "no log yet: ${LOG_FILE}"
+    return 1
+  fi
   tail -n "${lines}" "${LOG_FILE}"
 }
 
 #######################################
-# Validate the config and report the result.
+# Check the three proxy invariants. A violation is reported, not fixed.
 # Returns:
-#   1 if the config is invalid.
+#   0 when every invariant holds, 1 otherwise.
 #######################################
-show_check() {
-  check_config || return 1
-  echo 'config is valid'
+check_proxy() {
+  local rc=0 running=0 status
+  status="$("${BUSYBOX}" sv status "${SERVICE_DIR}" 2>/dev/null)"
+  case "${status}" in
+    run:*)
+      running=1
+      if ! ip -o link show tun0 >/dev/null 2>&1; then
+        err 'check: the service runs, but tun0 does not exist'
+        rc=1
+      fi
+      ;;
+    *) echo 'check: sing-box is not running' ;;
+  esac
+  if ip rule show 2>/dev/null \
+    | awk -F: '$1 >= 8900 && $1 <= 9600' \
+    | grep -q suppress_prefixlength; then
+    err 'check: a suppress_prefixlength rule shadows the Layer 0 and 1 rules'
+    rc=1
+  fi
+  if ip route show table 2022 2>/dev/null | grep -q '^10\.0\.0\.0/24'; then
+    err 'check: table 2022 routes 10.0.0.0/24 through the proxy'
+    rc=1
+  fi
+  if [ "${running}" = 0 ]; then
+    echo 'check: the proxy is stopped, Layer 1 fails open through table 9500'
+  elif [ "${rc}" -eq 0 ]; then
+    echo 'check: ok'
+  fi
+  return "${rc}"
 }
 
 #######################################
-# Dispatch the first argument to a subcommand.
+# Print the command usage.
+#######################################
+usage() {
+  err "usage: $0 start|stop|status|log [lines]|check"
+  exit 1
+}
+
+#######################################
+# Dispatch the command line arguments.
 #######################################
 main() {
   case "${1:-}" in
-    start)
-      start_daemon
-      ;;
-    stop)
-      stop_daemon
-      ;;
+    start | stop) sv_action "${1}" ;;
     restart)
-      stop_daemon
-      start_daemon
-      ;;
-    status)
-      show_status
-      ;;
-    log)
-      show_log "${2:-}"
-      ;;
-    check)
-      show_check
-      ;;
-    *)
-      err "usage: $0 {start|stop|restart|status|log [lines]|check}"
+      # `sv restart` starts the new instance before the old one released the
+      # tun device and the API port, so it fails. Use stop, then start.
+      err 'restart is not supported: run stop, then start'
       exit 1
       ;;
+    status) show_status ;;
+    log) show_log "${2:-}" ;;
+    check) check_proxy ;;
+    *) usage ;;
   esac
 }
 

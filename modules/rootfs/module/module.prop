@@ -1,7 +1,6 @@
 id=rootfs
-name=Layer 1 Pivot Rootfs
-version=0.1.0
-versionCode=100
+name=Layer 1 Host
+version=0.2.0
+versionCode=200
 author=kui04
-description=Layer 1 pivot root container and runsvdir supervisor with cgroup v1. Control: rootfs-service
-
+description=Layer 1 Alpine host on an ext4 loop image with OpenRC and Docker. Control: rootfs-service

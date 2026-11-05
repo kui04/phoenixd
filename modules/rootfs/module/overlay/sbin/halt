@@ -1,0 +1,3 @@
+#!/bin/sh
+# Stops the services of Layer 1. The phone stays up.
+exec /sbin/reboot

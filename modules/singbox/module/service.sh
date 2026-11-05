@@ -1,6 +1,6 @@
 #!/system/bin/sh
 #
-# Starts sing-box when the module is enabled.
+# Starts the proxy at boot. It does not wait for Layer 1 or headless.
 
 MODDIR="${0%/*}"
 readonly MODDIR

@@ -1,6 +1,6 @@
 #!/system/bin/sh
 #
-# Hot install hook: start sing-box without a reboot.
+# Hot install hook: start the proxy without a reboot.
 
 MODDIR="${0%/*}"
 readonly MODDIR

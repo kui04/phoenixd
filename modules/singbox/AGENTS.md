@@ -70,10 +70,10 @@ newer. The test kernel has no `nf_tables`; the module does not need it.
   `sing-box started` in the fresh log; a log level above info falls back to
   "process alive after 10 s".
 - Configuration file lives exclusively at `/data/adb/singbox/config.json`.
-- Keep `auto_redirect` on. On Android sing-box uses `/system/bin/iptables`
-  (`-t nat -I OUTPUT` with `-o tun0` and a local redirect server) and does not
-  touch nftables. On this device the chain setup produced three nat and three
-  filter rules.
+- Keep `auto_redirect` off. This kernel has no `nf_tables` support, so
+  auto-redirect cannot install its rules. Keep `stack: gvisor` as well: the TUN
+  device carries the traffic, and `/system/bin/iptables` adds the redirect
+  rules with the legacy backend only.
 - Keep the `api` service on `127.0.0.1:9090`. A dashboard in the phone browser
   uses it; no firewall rule is needed.
 - The installer wipes `$MODPATH` on upgrade but only copies

@@ -1,61 +1,87 @@
 #!/system/bin/sh
 #
-# Best-effort removal of everything the rootfs module created.
+# Removes the files that the rootfs module installs. The image and the bind
+# declarations stay, so that a reinstall keeps its data.
 
 MODDIR="$(cd "${0%/*}/.." && pwd)"
+. "${MODDIR}/scripts/common.sh"
 readonly MODDIR
-ROOTFS_DIR=/data/adb/rootfs
-BUSYBOX="${ROOTFS_DIR}/bin/busybox"
-[ -x "${BUSYBOX}" ] || BUSYBOX=/data/adb/ksu/bin/busybox
-readonly BUSYBOX ROOTFS_DIR
+KSU_BIN_DIR=/data/adb/ksu/bin
+readonly KSU_BIN_DIR
 
 #######################################
-# Stop the supervisor and container.
+# Stop Layer 1 and detach the image. The detach is skipped when a process
+# still holds the image, so that an uninstall cannot corrupt a live system.
 # Globals:
 #   MODDIR
 #######################################
-stop_supervisor() {
-  sh "${MODDIR}/scripts/control.sh" stop >/dev/null 2>&1
+stop_layer1() {
+  local loop
+  sh "${MODDIR}/scripts/host.sh" stop >/dev/null 2>&1
+  if l1_running; then
+    sh "${MODDIR}/scripts/control.sh" stop >/dev/null 2>&1
+  fi
+  if l1_running; then
+    echo 'Layer 1 still runs, the image stays attached'
+    return 0
+  fi
+  loop="$(image_loop_device)"
+  if [ -n "${loop}" ]; then
+    image_release "${loop}"
+  fi
 }
 
 #######################################
-# Remove the hierarchies that rootfs mounted: devices, freezer, pids.
+# Remove the wrappers that this module installs.
 # Globals:
-#   BUSYBOX
-#   ROOTFS_DIR
+#   KSU_BIN_DIR
 #######################################
-delete_cgroup_hierarchies() {
-  local hierarchy
-  for hierarchy in devices freezer pids; do
-    "${BUSYBOX}" unshare -m --propagation private sh -c '
-      mkdir -p "$2"
-      mount -t cgroup -o "$1" "$1" "$2" 2>/dev/null || exit 0
-      for cgroup in "$2"/*; do
-        [ -d "${cgroup}" ] && rmdir "${cgroup}" 2>/dev/null
-      done
-      umount "$2"
-    ' _ "${hierarchy}" "${ROOTFS_DIR}/run/cgtmp" 2>/dev/null
+remove_wrappers() {
+  rm -f "${KSU_BIN_DIR}/rootfs-service" "${KSU_BIN_DIR}/rootfs-exec"
+}
+
+#######################################
+# Remove only what this module owns: its two host services, its binaries, its
+# run state, and the cache. The host-service directory itself stays, because
+# the headless and singbox modules keep their services there.
+# Globals:
+#   IMAGE_PATH
+#   ROOTFS_HOME
+#######################################
+remove_runtime_tree() {
+  local entry
+  for entry in bin drivers run state api_version; do
+    rm -rf "${ROOTFS_HOME:?}/${entry:?}"
+  done
+  for entry in network dns; do
+    rm -rf "${ROOTFS_HOME:?}/host-service/${entry:?}"
+  done
+  # A tree from an older build may still hold module payloads.
+  for entry in lib share service settings.sh; do
+    rm -rf "${ROOTFS_HOME:?}/${entry:?}"
   done
 }
 
 #######################################
-# Remove the wrappers and the data directory.
+# Print the paths that survive the uninstall.
 # Globals:
-#   ROOTFS_DIR
+#   IMAGE_PATH
+#   ROOTFS_HOME
 #######################################
-delete_data() {
-  rm -f /data/adb/ksu/bin/rootfs-service /data/adb/ksu/bin/rootfs-exec
-  rm -rf "${ROOTFS_DIR:?}"
+print_kept() {
+  echo 'kept:'
+  echo "  ${IMAGE_PATH}"
+  echo "  ${ROOTFS_HOME}/mounts.d"
 }
 
 #######################################
-# Execute full cleanup.
+# Remove the module from the device.
 #######################################
 main() {
-  stop_supervisor
-  delete_cgroup_hierarchies
-  delete_data
+  stop_layer1
+  remove_wrappers
+  remove_runtime_tree
+  print_kept
 }
 
 main "$@"
-

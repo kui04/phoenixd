@@ -1,0 +1,8 @@
+#!/bin/sh
+# Stops the services of Layer 1 and the supervisor. The phone stays up: Layer
+# 1 has no init process, and the kernel is untouched.
+/sbin/openrc shutdown
+if [ -f /run/l1-supervisor.pid ]; then
+  kill -TERM "$(cat /run/l1-supervisor.pid)" 2>/dev/null
+fi
+exit 0

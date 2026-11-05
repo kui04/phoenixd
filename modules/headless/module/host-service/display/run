@@ -1,0 +1,14 @@
+#!/system/bin/sh
+# Supervises the DRM status display daemon.
+ROOTFS_HOME="${ROOTFS_HOME:-/data/adb/rootfs}"
+MODDIR="${MODDIR:-/data/adb/modules/headless}"
+. "${MODDIR}/scripts/common.sh"
+
+exec >>"${RUN_DIR}/display.log" 2>&1
+if [ ! -x "${BIN_DIR}/phx-statusd" ]; then
+  log 'phx-statusd is missing'
+  sleep 30
+  exit 1
+fi
+exec "${BIN_DIR}/phx-statusd" --timeout "${DISPLAY_TIMEOUT}" \
+  --brightness "${DISPLAY_BRIGHTNESS}"

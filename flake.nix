@@ -13,6 +13,16 @@
         let
           pkgs = nixpkgs.legacyPackages.${system};
           static = pkgs.pkgsCross.aarch64-multiplatform-musl.pkgsStatic;
+          dns-forwarder = static.stdenv.mkDerivation {
+            pname = "dns-forwarder";
+            version = "1.0.0";
+            src = pkgs.lib.cleanSource ./modules/rootfs/src;
+            buildPhase = "make";
+            installPhase = ''
+              mkdir -p $out/bin
+              cp dns-forwarder $out/bin/
+            '';
+          };
           phx-statusd = static.stdenv.mkDerivation {
             pname = "phx-statusd";
             version = "1.0.0";
@@ -21,7 +31,6 @@
             installPhase = ''
               mkdir -p $out/bin
               cp phx-statusd $out/bin/
-              cp dns-forwarder $out/bin/
             '';
           };
           crossGlibc = pkgs.pkgsCross.aarch64-multiplatform;
@@ -135,11 +144,11 @@
             cp ${static.wpa_supplicant}/bin/wpa_cli $out/bin/wpa_cli
             cp ${static.iw}/bin/iw $out/bin/iw
             cp ${phx-statusd}/bin/phx-statusd $out/bin/phx-statusd
-            cp ${phx-statusd}/bin/dns-forwarder $out/bin/dns-forwarder
+            cp ${dns-forwarder}/bin/dns-forwarder $out/bin/dns-forwarder
           '';
         in
         {
-          inherit layer1-bin phx-statusd msm-vaapi-driver mesa-kgsl layer1-drivers;
+          inherit dns-forwarder layer1-bin phx-statusd msm-vaapi-driver mesa-kgsl layer1-drivers;
           default = layer1-bin;
         });
 
@@ -150,6 +159,7 @@
           default = pkgs.mkShell {
             packages = with pkgs; [
               android-tools
+              apk-tools
               beautysh
               clang-tools
               curl

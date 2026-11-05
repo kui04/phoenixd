@@ -1,0 +1,35 @@
+# Hardware-accelerated container template for phoenixd (Adreno 618 + MSM
+# VA-API). The driver payload is the read-only bind that mounts.d declares.
+services:
+  app-accel:
+    image: ubuntu:24.04
+    container_name: app-accel
+    restart: unless-stopped
+    devices:
+      # Direct Rendering Manager (DRM) interfaces
+      - /dev/dri:/dev/dri
+      # Qualcomm Adreno GPU command processor and memory mapping
+      - /dev/kgsl-3d0:/dev/kgsl-3d0
+      # Qualcomm ION memory allocator for zero-copy DMA buffers
+      - /dev/ion:/dev/ion
+      # Qualcomm MSM V4L2 hardware video decoder
+      - /dev/video32:/dev/video32
+      # Qualcomm MSM V4L2 hardware video encoder (read-only/reserved)
+      - /dev/video33:/dev/video33
+    volumes:
+      # Layer 1 driver payload: Turnip Vulkan, libdrm, MSM VA-API
+      - /opt/phoenixd/drivers/lib:/usr/local/lib/layer1-drivers:ro
+      - /opt/phoenixd/drivers/share/vulkan/icd.d:/usr/share/vulkan/icd.d:ro
+    environment:
+      # Dynamic linker search path for Turnip and libdrm
+      - LD_LIBRARY_PATH=/usr/local/lib/layer1-drivers
+      # VA-API driver search path and driver name
+      - LIBVA_DRIVERS_PATH=/usr/local/lib/layer1-drivers/dri
+      - LIBVA_DRIVER_NAME=msm_drm
+      # Explicit Vulkan ICD registration
+      - VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/freedreno_icd.aarch64.json
+      # Mesa Gallium driver override for OpenGL on Vulkan
+      - GALLIUM_DRIVER=zink
+      # Bypass non-conformance warning checks in Turnip
+      - TU_DEBUG=noconform
+    command: ["sh", "-c", "sleep infinity"]

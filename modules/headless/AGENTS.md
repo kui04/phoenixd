@@ -11,6 +11,10 @@ Layer 1 supervisor (`modules/rootfs`) with static `wpa_supplicant` and `udhcpc`.
 It configures policy routing and firewall rules so Layer 2 Docker containers can
 access the network.
 
+- `module/host-service/{wifi,charge,display}/run` are the runit services that
+  the host supervisor of `modules/rootfs` runs. `wifi` hands `wlan0` over from
+  Android, `charge` keeps the battery between two thresholds, and `display`
+  runs `phx-statusd`.
 - `module/` is the zip root.
   - `module/module.prop`: module id, version, integer `versionCode`.
   - `module/customize.sh`: installer. Copies static binaries to
@@ -23,10 +27,10 @@ access the network.
     `/data/adb/ksu/bin`, execs the module copy of `control.sh`.
   - `module/scripts/net.sh`: policy routing (`ip rule`) and iptables rules for
     Docker egress without Android `netd`.
-  - `module/scripts/dhcp-event.sh`: `udhcpc` event handler for address,
-    default route, and DNS nameserver updates.
-  - `module/scripts/service/`: runit service definitions for `wifi`, `dhcp`,
-    `dns-forwarder`, `charge`, and `display`.
+  - `module/host-service/wifi/dhcp.sh`: `udhcpc` event handler for the
+    address, the default route, and the resolver file.
+  - `module/host-service/`: runit services for `wifi`, `charge`, and `display`.
+    The DNS forwarder moved to `modules/rootfs`.
   - `module/etc/wifi.conf`: template configuration for `wpa_supplicant`.
   - `module/files/`: build artifacts (`busybox`, `wpa_supplicant`, `wpa_cli`,
     `iw`, `phx-statusd`, `dns-forwarder`), gitignored.
@@ -65,7 +69,7 @@ Qualcomm WLAN driver (`qcacld-3.0` / `icnss`) initialized by `cnss-daemon`.
 ## Commands
 
 - Build: `./build.sh` (needs `bash`, `nix`, `zip`, `sha256sum`).
-- Lint: `nix run nixpkgs#shellcheck -- -s busybox module/*.sh module/scripts/*.sh module/scripts/service/*.sh`
+- Lint: `nix run nixpkgs#shellcheck -- -s busybox module/*.sh module/scripts/*.sh module/host-service/*/run`
   and `nix run nixpkgs#shellcheck -- -s bash build.sh`. ShellCheck reads
   centralized directives from root `.shellcheckrc`.
 - Syntax check: `nix run nixpkgs#busybox -- ash -n <file>`.

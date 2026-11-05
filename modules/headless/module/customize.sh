@@ -10,6 +10,8 @@ SKIPUNZIP=0
 export MODULE_HOT_INSTALL_REQUEST=true
 export MODULE_HOT_RUN_SCRIPT='hotinstall.sh'
 
+ROOTFS_HOME=/data/adb/rootfs
+export ROOTFS_HOME
 HEADLESS_DIR=/data/adb/headless
 BIN_DIR="${HEADLESS_DIR}/bin"
 KSU_BIN_DIR=/data/adb/ksu/bin
@@ -23,10 +25,10 @@ if [ -x "${BIN_DIR}/wpa_supplicant" ]; then
   sh "${MODPATH}/scripts/control.sh" stop >/dev/null 2>&1
 fi
 
-mkdir -p "${BIN_DIR}" "${HEADLESS_DIR}/run"
+mkdir -p "${BIN_DIR}" "${HEADLESS_DIR}/run" "${ROOTFS_HOME}/host-service"
 
 ui_print '- Installing binaries'
-for name in busybox wpa_supplicant wpa_cli iw phx-statusd dns-forwarder; do
+for name in busybox wpa_supplicant wpa_cli iw phx-statusd; do
   cp -f "${MODPATH}/files/${name}" "${BIN_DIR}/${name}" \
     || abort "! Failed to install ${name}"
   chmod 755 "${BIN_DIR}/${name}"
@@ -35,6 +37,14 @@ for name in runsv runsvdir sv pkill; do
   ln -sf busybox "${BIN_DIR}/${name}"
 done
 rm -rf "${MODPATH}/files"
+
+ui_print '- Installing the host services'
+if [ -d "${MODPATH}/host-service" ]; then
+  cp -af "${MODPATH}/host-service/." "${ROOTFS_HOME}/host-service/" ||
+    abort '! Failed to install the host services'
+  find "${MODPATH}/host-service" "${ROOTFS_HOME}/host-service" \
+    -type f -exec chmod 755 {} +
+fi
 
 if [ ! -f "${HEADLESS_DIR}/settings.sh" ]; then
   cp -f "${MODPATH}/scripts/settings.sh" "${HEADLESS_DIR}/settings.sh"

@@ -6,8 +6,7 @@
 
 The workspace is organized into modules:
 
-- `modules/rootfs/`: Layer 1 Linux pivot root container and runsvdir supervisor with cgroup v1. (See [modules/rootfs/AGENTS.md](modules/rootfs/AGENTS.md)).
-- `modules/dockerd/`: Static Docker Engine running under Layer 1 rootfs. (See [modules/dockerd/AGENTS.md](modules/dockerd/AGENTS.md)).
+- `modules/rootfs/`: Layer 1 Alpine host on an ext4 loop image with OpenRC and Docker. (See [modules/rootfs/AGENTS.md](modules/rootfs/AGENTS.md)).
 - `modules/headless/`: Headless Linux server setup. Stops the Android UI stack, controls battery charging, and manages Wi-Fi under rootfs. (See [modules/headless/AGENTS.md](modules/headless/AGENTS.md)).
 - `modules/singbox/`: sing-box transparent proxy using TUN interface and iptables redirect under rootfs. (See [modules/singbox/AGENTS.md](modules/singbox/AGENTS.md)).
 
@@ -24,19 +23,16 @@ The server operates in three decoupled architecture layers:
   - Native vendor daemons stay active; Android UI stack (`zygote`,
     `surfaceflinger`, media) stops after boot, and battery charging is
     controlled (`modules/headless`).
-- **Layer 1 (Pivot Root Container)**:
-  - Persistent Linux container environment created with `unshare -m` and
+- **Layer 1 (Alpine Host)**:
+  - Alpine on an ext4 loop image, started with `unshare -m -p -u -i` and
     `pivot_root` (`modules/rootfs`).
-  - Runs container supervisor (`runsvdir -P /service`) on a tmpfs root with
-    cgroup v1 mounts.
-  - Shares host network namespace to manage `wlan0` directly without Android
-    `netd`.
-  - Runs Wi-Fi under supervisor with static `wpa_supplicant` and `udhcpc`
-    (`modules/headless`).
-  - Configures policy routing (`ip rule add pref 9500 lookup main`) and
-    iptables rules (`MASQUERADE`, `FORWARD`).
-  - Hosts system daemons: transparent proxy (`sing-box`) and the Docker
-    daemon (`dockerd`).
+  - Own network namespace `l1` behind a veth pair with `10.0.0.2/24`. Layer 0
+    owns `veth0`, table 9500, and the `PHOENIXD_*` iptables objects.
+  - BusyBox init runs OpenRC; the Docker daemon is an OpenRC service.
+  - Host services `network`, `dns`, and `wifi` run under
+    `runsvdir /data/adb/rootfs/host-service`.
+  - `wlan0` belongs to Layer 0: the `wifi` service today, the `headless`
+    module in the plan. The transparent proxy runs on Layer 0.
   - Provisions hardware acceleration drivers from `flake.nix`
     (`.#layer1-drivers`): Turnip Adreno Vulkan (`libvulkan_freedreno.so`) and
     MSM V4L2 VA-API video decode (`msm_drm_drv_video.so`).
@@ -47,7 +43,7 @@ The server operates in three decoupled architecture layers:
   - Executed and managed by the Layer 1 Docker Engine.
   - Can mount Layer 1 drivers to use Turnip Vulkan 1.3, Mesa Zink OpenGL 4.6 /
     GLES 3.2, and VA-API hardware video decode (see
-    `modules/dockerd/module/etc/docker-compose.hardware-accel.yml` and
+    `modules/rootfs/module/overlay/opt/phoenixd/etc/docker-compose.hardware-accel.yml` and
     Hardware Codec Boundary below).
 
 ## Shell Code Standards
@@ -75,15 +71,13 @@ All shell scripts are formatted with `beautysh` (configured for 2-space indentat
 # Check formatting across all shell scripts
 nix run nixpkgs#beautysh -- --check -i 2 -s paronly --variable-style braces \
   modules/rootfs/build.sh modules/rootfs/module/*.sh modules/rootfs/module/scripts/*.sh \
-  modules/dockerd/build.sh modules/dockerd/module/*.sh modules/dockerd/module/scripts/*.sh \
-  modules/headless/build.sh modules/headless/module/*.sh modules/headless/module/scripts/*.sh modules/headless/module/scripts/service/*.sh \
+  modules/headless/build.sh modules/headless/module/*.sh modules/headless/module/scripts/*.sh modules/headless/module/host-service/*/run \
   modules/singbox/build.sh modules/singbox/module/*.sh modules/singbox/module/scripts/*.sh
 
 # Format files in-place
 nix run nixpkgs#beautysh -- -i 2 -s paronly --variable-style braces \
   modules/rootfs/build.sh modules/rootfs/module/*.sh modules/rootfs/module/scripts/*.sh \
-  modules/dockerd/build.sh modules/dockerd/module/*.sh modules/dockerd/module/scripts/*.sh \
-  modules/headless/build.sh modules/headless/module/*.sh modules/headless/module/scripts/*.sh modules/headless/module/scripts/service/*.sh \
+  modules/headless/build.sh modules/headless/module/*.sh modules/headless/module/scripts/*.sh modules/headless/module/host-service/*/run \
   modules/singbox/build.sh modules/singbox/module/*.sh modules/singbox/module/scripts/*.sh
 ```
 
@@ -108,18 +102,15 @@ Run ShellCheck:
 nix run nixpkgs#shellcheck -- -s busybox \
   modules/rootfs/module/*.sh \
   modules/rootfs/module/scripts/*.sh \
-  modules/dockerd/module/*.sh \
-  modules/dockerd/module/scripts/*.sh \
   modules/headless/module/*.sh \
   modules/headless/module/scripts/*.sh \
-  modules/headless/module/scripts/service/*.sh \
+  modules/headless/module/host-service/*/run \
   modules/singbox/module/*.sh \
   modules/singbox/module/scripts/*.sh
 
 # Lint Bash build scripts
 nix run nixpkgs#shellcheck -- -s bash \
   modules/rootfs/build.sh \
-  modules/dockerd/build.sh \
   modules/headless/build.sh \
   modules/singbox/build.sh
 ```
@@ -130,8 +121,7 @@ Verify that POSIX scripts parse cleanly under BusyBox ash:
 
 ```bash
 for f in modules/rootfs/module/*.sh modules/rootfs/module/scripts/*.sh \
-         modules/dockerd/module/*.sh modules/dockerd/module/scripts/*.sh \
-         modules/headless/module/*.sh modules/headless/module/scripts/*.sh modules/headless/module/scripts/service/*.sh \
+         modules/headless/module/*.sh modules/headless/module/scripts/*.sh modules/headless/module/host-service/*/run \
          modules/singbox/module/*.sh modules/singbox/module/scripts/*.sh; do
   nix run nixpkgs#busybox -- ash -n "$f"
 done

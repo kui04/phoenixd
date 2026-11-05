@@ -1,0 +1,7 @@
+# Layer 1 sees one interface. 10.0.0.1 is the Layer 0 end of the veth pair,
+# and it is also the DNS forwarder of Layer 1.
+auto eth0
+iface eth0 inet static
+  address 10.0.0.2/24
+  gateway 10.0.0.1
+  mtu 1500

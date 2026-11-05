@@ -9,6 +9,8 @@ SKIPUNZIP=0
 export MODULE_HOT_INSTALL_REQUEST=true
 export MODULE_HOT_RUN_SCRIPT='hotinstall.sh'
 
+ROOTFS_HOME=/data/adb/rootfs
+export ROOTFS_HOME
 SINGBOX_DIR=/data/adb/singbox
 KSU_BIN_DIR=/data/adb/ksu/bin
 
@@ -25,6 +27,17 @@ mkdir -p "${SINGBOX_DIR}/bin" "${SINGBOX_DIR}/run"
 cp -f "${MODPATH}/files/sing-box" "${SINGBOX_DIR}/bin/sing-box"
 chmod 755 "${SINGBOX_DIR}/bin/sing-box"
 rm -rf "${MODPATH}/files"
+
+ui_print '- Installing the host service'
+mkdir -p "${ROOTFS_HOME}/host-service"
+if [ -d "${MODPATH}/host-service" ]; then
+  if ! cp -af "${MODPATH}/host-service/." \
+    "${ROOTFS_HOME}/host-service/"; then
+    abort '! Failed to install the host service'
+  fi
+  find "${MODPATH}/host-service" "${ROOTFS_HOME}/host-service/singbox" \
+    -type f -exec chmod 755 {} +
+fi
 
 if [ ! -f "${SINGBOX_DIR}/config.json" ]; then
   cp -f "${MODPATH}/etc/config.json" "${SINGBOX_DIR}/config.json"

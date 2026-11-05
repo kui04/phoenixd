@@ -1,0 +1,45 @@
+#!/sbin/openrc-run
+# Brings up eth0 and provides net. Alpine's networking service carries
+# keyword -docker, so OpenRC drops it, together with its provide, in the
+# docker system type. Layer 1 needs a real service instead.
+
+description="Configure eth0 from the interfaces file"
+
+depend() {
+  after loopback
+  provide net
+}
+
+start() {
+  local attempt=0 rc=1
+  ebegin "Configuring eth0"
+  # ifup skips the address when its state file still lists eth0 as up, which
+  # happens after a restart, and a stale route makes the add fail with EEXIST.
+  ifdown -i /etc/network/interfaces eth0 2>/dev/null
+  ip route del default dev eth0 2>/dev/null
+  ip addr del 10.0.0.2/24 dev eth0 2>/dev/null
+  # The veth pair settles while OpenRC boots, so the first ifup can fail.
+  while [ "${attempt}" -lt 3 ]; do
+    ifup -i /etc/network/interfaces eth0
+    rc=$?
+    if [ "${rc}" -eq 0 ]; then
+      break
+    fi
+    if ip -4 -o addr show eth0 2>/dev/null | grep -q '10\.0\.0\.2/24'; then
+      rc=0
+      break
+    fi
+    attempt=$(( attempt + 1 ))
+    sleep 2
+  done
+  if [ "${rc}" -ne 0 ]; then
+    eerror "ifup failed after 3 attempts"
+  fi
+  eend "${rc}"
+}
+
+stop() {
+  ebegin "Stopping eth0"
+  ifdown -i /etc/network/interfaces eth0
+  eend $?
+}

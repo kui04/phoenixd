@@ -10,6 +10,10 @@ dist/
 **/module/files/docker.tar.xz
 **/module/files/cli-plugins/
 **/module/files/sing-box
+**/module/files/alpine-minirootfs-*.tar.gz
+**/module/files/apk-cache/
+**/module/files/dns-forwarder
+**/module/files/drivers/
 
 # Temporary files
 *.tmp

@@ -1,6 +1,6 @@
 id=headless
 name=Headless Android
-version=0.1.1
-versionCode=101
+version=0.2.0
+versionCode=200
 author=kui04
-description=Stops the Android UI stack, controls battery charging, and runs Wi-Fi and DNS under runsvdir. Control: headless-service
+description=Stops the Android UI stack, runs Wi-Fi, charge, and display as host services. Control: headless-service

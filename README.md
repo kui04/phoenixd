@@ -39,11 +39,11 @@ The server operates in three decoupled architecture layers:
 - **Networking**: Shares the host network namespace. Layer 1 directly controls
   the `wlan0` Wi-Fi interface without Android `netd`.
 - **System Services**:
-  - `wifi`: Static `wpa_supplicant` 2.12 controls `wlan0` through `nl80211`.
-  - `dhcp`: Static `udhcpc` acquires DHCP leases and configures routes.
+  - `wifi`: Static `wpa_supplicant` 2.12 controls `wlan0`, and `udhcpc`
+    acquires the lease and the default route.
   - `charge`: Monitors battery capacity and controls charging current.
-  - `singbox`: Runs `sing-box` transparent proxy with `tun0` interface.
-  - `dockerd`: Runs static Docker Engine 29.9.2 with container isolation.
+  - `singbox`: Runs the `sing-box` transparent proxy with `tun0`.
+  - `docker`: OpenRC service that runs Docker Engine 29.9.2 inside Layer 1.
 
 ### Layer 2: Docker Containers
 
@@ -59,10 +59,9 @@ The workspace contains four decoupled KernelSU Next modules:
 
 | Module             | Description                                              | Control CLI                     |
 | :----------------- | :------------------------------------------------------- | :------------------------------ |
-| `modules/rootfs`   | Layer 1 pivot root container and `runsvdir` supervisor   | `rootfs-service`, `rootfs-exec` |
+| `modules/rootfs`   | Layer 1 Alpine host, OpenRC, Docker, and network         | `rootfs-service`, `docker`      |
 | `modules/headless` | Headless setup, Wi-Fi management, and battery protection | `headless-service`              |
 | `modules/singbox`  | Transparent TUN proxy using sing-box                     | `singbox-service`               |
-| `modules/dockerd`  | Static Docker Engine, Compose, and Buildx                | `dockerd-service`, `docker`     |
 
 ### Battery Charge Control
 
@@ -99,10 +98,9 @@ access.
 ├── .shellcheckrc        # Centralized ShellCheck configuration
 ├── SHELL_GUIDE.md       # Google Shell Style Guide reference
 └── modules/
-    ├── rootfs/          # Layer 1 pivot root container and runsvdir supervisor
-    ├── headless/        # Headless server, Wi-Fi supervisor, and charge control
-    ├── singbox/         # sing-box transparent TUN proxy
-    └── dockerd/         # Static Docker Engine, Compose, and Buildx
+    ├── rootfs/          # Layer 1 Alpine host, OpenRC, Docker, and network
+    ├── headless/        # Wi-Fi, charge, and display host services
+    └── singbox/         # sing-box transparent TUN proxy
 ```
 
 ## Prerequisites
@@ -128,9 +126,6 @@ or build all modules:
 
 # Build sing-box transparent proxy module
 (cd modules/singbox && ./build.sh)
-
-# Build Docker Engine module
-(cd modules/dockerd && ./build.sh)
 ```
 
 Each build script packages the installable zip file into `modules/<name>/dist/`.
@@ -141,10 +136,9 @@ Each build script packages the installable zip file into `modules/<name>/dist/`.
 
 Install the modules in this order:
 
-1. **`rootfs`**: Provides the Layer 1 container environment and supervisor.
-2. **`headless`**: Stops the Android UI and manages Wi-Fi and charging.
-3. **`singbox`** (Optional): Provides transparent proxying.
-4. **`dockerd`**: Provides Docker container runtime.
+1. **`rootfs`**: Layer 1 Alpine host, OpenRC, Docker, and the network.
+2. **`headless`**: Stops the Android UI and runs Wi-Fi, charge, and display.
+3. **`singbox`** (Optional): Transparent proxy and its routing rules.
 
 ### 2. Device Installation via ADB
 
@@ -152,8 +146,8 @@ Connect the device over USB ADB:
 
 ```bash
 # 1. Install rootfs module
-adb push modules/rootfs/dist/rootfs-0.1.0.zip /data/local/tmp/
-adb shell su -c "/data/adb/ksu/bin/ksud module install /data/local/tmp/rootfs-0.1.0.zip"
+adb push modules/rootfs/dist/rootfs-0.2.0.zip /data/local/tmp/
+adb shell su -c "/data/adb/ksu/bin/ksud module install /data/local/tmp/rootfs-0.2.0.zip"
 
 # 2. Configure Wi-Fi credentials before starting headless
 adb shell su -c "cat << 'EOF' > /data/adb/headless/wifi.conf
@@ -168,17 +162,30 @@ EOF"
 adb shell su -c "chmod 600 /data/adb/headless/wifi.conf"
 
 # 3. Install headless module
-adb push modules/headless/dist/headless-0.1.0.zip /data/local/tmp/
-adb shell su -c "/data/adb/ksu/bin/ksud module install /data/local/tmp/headless-0.1.0.zip"
+adb push modules/headless/dist/headless-0.2.0.zip /data/local/tmp/
+adb shell su -c "/data/adb/ksu/bin/ksud module install /data/local/tmp/headless-0.2.0.zip"
 
 # 4. Install sing-box module (optional)
 adb push modules/singbox/dist/singbox-1.14.3.zip /data/local/tmp/
 adb shell su -c "/data/adb/ksu/bin/ksud module install /data/local/tmp/singbox-1.14.3.zip"
-
-# 5. Install dockerd module
-adb push modules/dockerd/dist/dockerd-29.9.2.zip /data/local/tmp/
-adb shell su -c "/data/adb/ksu/bin/ksud module install /data/local/tmp/dockerd-29.9.2.zip"
 ```
+
+### 3. Migration from v1
+
+The v2 modules replace the v1 `rootfs`, `headless`, `singbox`, and `dockerd`
+modules. `dockerd` is folded into `rootfs`, so remove that module directory by
+hand after the upgrade. Do not run its uninstaller: it deletes
+`/data/adb/dockerd`, which holds the Docker data.
+
+```bash
+# Stop v1 in this order, then install the three zips above.
+su -c 'singbox-service stop; dockerd-service stop'
+su -c 'headless-service stop; rootfs-service stop'
+rm -rf /data/adb/modules/dockerd
+```
+
+`/data/adb/dockerd/data` is kept and reopened by the Docker service of
+`rootfs`. `rootfs-service health` shows the state after the upgrade.
 
 ## Device CLI Management
 
@@ -199,7 +206,10 @@ the root `PATH`:
 
 ### sing-box Transparent Proxy
 
-- Control: `singbox-service {start|stop|restart|status|log [lines]|check}`
+- Control: `singbox-service {start|stop|status|log [lines]|check}`
+- Restart: run `singbox-service stop`, then `singbox-service start`.
+  `sv restart` starts the next instance before the old one released the
+  tun device and the API port, so it fails.
 - Validate configuration: `singbox-service check`
 
 ### Docker Engine
@@ -207,7 +217,38 @@ the root `PATH`:
 - Control daemon: `dockerd-service {start|stop|restart|status|log [lines]}`
 - Run Docker commands: `docker ps`, `docker run -d --restart=always nginx`
 
+## Acceptance Suite
+
+The `at/` directory holds the acceptance suite. It runs the static gates on the
+host, pushes every case to the device, and runs them as root one by one.
+
+```bash
+# Run every case, in order
+./at/run.sh
+
+# Run selected cases only (any case id from at/cases)
+./at/run.sh at-16 at-18 at-23 at-30
+```
+
+- Exit code `0` means no case failed.
+- Each case prints `PASS <id>`, `FAIL <id>`, or `SKIP <id>` with the reason.
+- `AT-00` runs the static gates: `beautysh`, ShellCheck, and `ash -n`.
+- Per-case logs stay on the device under `/data/local/tmp/at`.
+- Use `ANDROID_SERIAL` to select another device. The default is `ff2c54da`.
+
+The suite covers 40 cases. Nine of them SKIP by design and print the reason:
+`at-23` and `at-62` need a second LAN host to probe the published port,
+`at-48` needs a phone reboot, `at-51` needs a stopped Layer 1, `at-55` needs a
+small filesystem, `at-42`, `at-60`, `at-61`, and `at-63` need a manual drill
+(Wi-Fi blocking, fault injection, the v1 migration, and the DNAT timing probe).
+
+Cases `at-16` and `at-18` restart Layer 1 in place. They also prove that the
+Docker daemon of the next instance gets the containerd metadata lock, because
+`rootfs-service stop` kills every process of the old mount namespace and
+`start` refuses to run while that lock is held.
+
 ## Code Standards and Verification
+
 
 All shell scripts follow the Google Shell Style Guide:
 

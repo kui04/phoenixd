@@ -1,196 +1,208 @@
 #!/system/bin/sh
 #
-# Controls the rootfs container and supervisor: start, stop, restart,
-# status, log.
+# Controls Layer 1: start, stop, restart, status, log, exec, shell, host,
+# image, docker. The image subcommands delegate to image.sh, and the Layer 0
+# network objects belong to network.sh.
 
 MODDIR="$(cd "${0%/*}/.." && pwd)"
+. "${MODDIR}/scripts/common.sh"
 readonly MODDIR
-ROOTFS_DIR=/data/adb/rootfs
-BUSYBOX="${ROOTFS_DIR}/bin/busybox"
-[ -x "${BUSYBOX}" ] || BUSYBOX=/data/adb/ksu/bin/busybox
-PID_FILE="${ROOTFS_DIR}/run/rootfs.pid"
-LOG_FILE="${ROOTFS_DIR}/run/rootfs.log"
-SERVICE_DIR="${ROOTFS_DIR}/service"
-readonly BUSYBOX LOG_FILE PID_FILE ROOTFS_DIR SERVICE_DIR
+LOG_FILE="${RUN_DIR}/l1.log"
+NETWORK_STATE="${ROOTFS_HOME}/state/network"
+START_LOCK="${RUN_DIR}/start.lock.d"
+START_TIMEOUT=30
+# A supervisor that dies within this window is a failed start.
+START_SETTLE=5
+readonly LOG_FILE NETWORK_STATE START_LOCK START_SETTLE START_TIMEOUT
 
 #######################################
-# Print an error message to stderr.
-# Arguments:
-#   Message.
-#######################################
-err() {
-  echo "$*" >&2
-}
-
-#######################################
-# Check whether a process is the rootfs supervisor.
-# Arguments:
-#   Process ID.
-# Returns:
-#   0 if the process matches, 1 otherwise.
-#######################################
-is_ours() {
-  local cmdline
-  cmdline="$(tr '\0' ' ' <"/proc/$1/cmdline" 2>/dev/null)"
-  case "${cmdline}" in
-    *"runsvdir"*"${SERVICE_DIR}"* | *"runsvdir"*"/service"*)
-      return 0
-      ;;
-  esac
-  return 1
-}
-
-#######################################
-# Check whether the supervisor runs.
+# Take the start lock, or exit with a clear message. A second start while the
+# first one runs must not touch the objects of the first one.
 # Globals:
-#   PID_FILE
-# Returns:
-#   0 if it runs, 1 otherwise.
+#   START_LOCK
 #######################################
-is_running() {
-  local pid
-  [ -f "${PID_FILE}" ] || return 1
-  pid="$(cat "${PID_FILE}" 2>/dev/null)"
-  [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null && is_ours "${pid}"
-}
-
-#######################################
-# Check whether a runsv process still holds a service lock.
-# Globals:
-#   BUSYBOX
-#   SERVICE_DIR
-# Returns:
-#   0 if a lock is held, 1 otherwise.
-#######################################
-service_locked() {
-  local lock
-  for lock in "${SERVICE_DIR}"/*/supervise/lock; do
-    [ -e "${lock}" ] || continue
-    "${BUSYBOX}" flock -n "${lock}" true 2>/dev/null || return 0
+lock_start() {
+  local count=0
+  mkdir -p "${RUN_DIR}"
+  while ! mkdir "${START_LOCK}" 2>/dev/null; do
+    count=$(( count + 1 ))
+    if [ "${count}" -ge 30 ]; then
+      err 'taking over a stale start lock'
+      rm -rf "${START_LOCK}"
+      count=0
+    fi
+    sleep 1
   done
-  return 1
 }
 
 #######################################
-# Start the rootfs container and supervisor.
+# Release the start lock.
 # Globals:
-#   BUSYBOX
-#   LOG_FILE
-#   MODDIR
-#   PID_FILE
-#   ROOTFS_DIR
-# Returns:
-#   1 if startup fails.
+#   START_LOCK
 #######################################
-start_daemon() {
-  local i
-  if is_running; then
-    echo 'rootfs already running'
+unlock_start() {
+  rm -rf "${START_LOCK}"
+}
+
+#######################################
+# Detach a loop device that a previous run left behind, so that a start after
+# a crash converges.
+# Globals:
+#   IMAGE_PATH
+#######################################
+release_stale_image() {
+  if [ -n "$(image_loop_device)" ]; then
+    log 'releasing every loop device of the image'
+    release_all_loops || err 'a loop device is still attached'
+  fi
+}
+
+#######################################
+# Start Layer 1: converge the Layer 0 transport, then start the launcher.
+#######################################
+start_l1() {
+  local count=0 pid
+  [ -f "${IMAGE_PATH}" ] || die "no image: ${IMAGE_PATH}, run: image create"
+  # The lock covers the running check as well: two starts that both saw a
+  # stopped Layer 1 would each mount the image and pick a supervisor.
+  lock_start
+  trap 'unlock_start' 0
+  if l1_running; then
+    trap - 0
+    unlock_start
+    log 'Layer 1 already runs'
     return 0
   fi
-  if [ ! -x "${BUSYBOX}" ]; then
-    err 'busybox is missing, reinstall the module'
-    return 1
+  release_stale_image
+  mkdir -p "${ROOTFS_HOME}/state"
+  printf 'up\n' >"${NETWORK_STATE}"
+  if ! sh "${MODDIR}/scripts/host.sh" start; then
+    die 'the host supervisor did not start'
   fi
-  mkdir -p "${ROOTFS_DIR}/run" "${ROOTFS_DIR}/service"
-
-  i=0
-  while ! mkdir "${ROOTFS_DIR}/run/start.lock.d" 2>/dev/null; do
-    if is_running; then
-      echo 'rootfs already running'
+  # A service that a manual `sv down` stopped stays down across a supervisor
+  # restart, so this module puts its own services back up.
+  for service in network dns; do
+    "${BUSYBOX}" sv up "${ROOTFS_HOME}/host-service/${service}" \
+      >/dev/null 2>&1
+  done
+  log 'converging the Layer 0 network'
+  if ! sh "${MODDIR}/scripts/network.sh" converge; then
+    sh "${MODDIR}/scripts/network.sh" down >/dev/null 2>&1
+    die 'the Layer 0 network setup failed'
+  fi
+  log 'starting Layer 1'
+  "${BUSYBOX}" setsid "${BUSYBOX}" sh "${MODDIR}/scripts/start.sh" \
+    >>"${LOG_FILE}" 2>&1 </dev/null &
+  while [ "${count}" -lt "${START_TIMEOUT}" ]; do
+    if l1_running; then
+      # A supervisor that dies right after it appears leaves the loop attached
+      # and the next start would report a dead instance as running, so the
+      # start only succeeds after the supervisor stays up for a moment.
+      pid="$(l1_pid)"
+      sleep "${START_SETTLE}"
+      if ! l1_running || [ "$(l1_pid)" != "${pid}" ]; then
+        log "Layer 1 (pid ${pid}) left right after it started"
+        break
+      fi
+      trap - 0
+      unlock_start
+      log "Layer 1 started (pid ${pid})"
       return 0
     fi
-    i=$(( i + 1 ))
-    if [ "${i}" -ge 30 ]; then
-      rm -rf "${ROOTFS_DIR}/run/start.lock.d"
+    sleep 1
+    count=$(( count + 1 ))
+  done
+  unlock_start
+  release_stale_image
+  sh "${MODDIR}/scripts/network.sh" down >/dev/null 2>&1
+  err 'Layer 1 did not start, see: rootfs-service log'
+  return 1
+}
+
+#######################################
+# Ask PID 1 to stop the services, then stop PID 1.
+# Arguments:
+#   Host PID of PID 1.
+#######################################
+stop_pid1() {
+  local pid="${1}" count=0
+  log 'stopping the Layer 1 services'
+  "${BUSYBOX}" nsenter -t "${pid}" -m -u -i -n -p -r -w -- \
+    /sbin/openrc shutdown >/dev/null 2>&1
+  kill -TERM "${pid}" 2>/dev/null
+  while kill -0 "${pid}" 2>/dev/null; do
+    if [ "${count}" -ge 10 ]; then
       break
     fi
     sleep 1
+    count=$(( count + 1 ))
   done
-
-  if is_running; then
-    rm -rf "${ROOTFS_DIR}/run/start.lock.d"
-    echo 'rootfs already running'
-    return 0
+  if kill -0 "${pid}" 2>/dev/null; then
+    kill -KILL "${pid}" 2>/dev/null
   fi
-
-  rm -f "${PID_FILE}"
-  "${BUSYBOX}" setsid "${BUSYBOX}" unshare -m --propagation private \
-    "${BUSYBOX}" sh "${MODDIR}/scripts/start.sh" \
-    >>"${LOG_FILE}" 2>&1 </dev/null &
-  i=0
-  while [ "${i}" -lt 30 ]; do
-    if is_running; then
-      rm -rf "${ROOTFS_DIR}/run/start.lock.d"
-      echo 'rootfs started'
-      return 0
-    fi
-    i=$(( i + 1 ))
-    sleep 1
-  done
-  rm -rf "${ROOTFS_DIR}/run/start.lock.d"
-  err "rootfs failed to start, see ${LOG_FILE}"
-  return 1
 }
 
 #######################################
-# Stop the supervisor and all monitored services.
-# Globals:
-#   BUSYBOX
-#   PID_FILE
-#   SERVICE_DIR
+# Stop Layer 1: stop PID 1, release the image, and remove the Layer 0
+# objects. The order keeps the image available while the namespace lives.
 #######################################
-stop_daemon() {
-  local i pid
-  pid=''
-  if is_running; then
-    pid="$(cat "${PID_FILE}" 2>/dev/null)"
-  fi
-  if [ -d "${SERVICE_DIR}" ]; then
-    "${BUSYBOX}" sv -w 15 exit "${SERVICE_DIR}"/* >/dev/null 2>&1
-  fi
+stop_l1() {
+  local count=0 ns='' pid
+  lock_start
+  trap 'unlock_start' 0
+  pid="$(l1_pid)" || pid=''
   if [ -n "${pid}" ]; then
-    kill "${pid}" 2>/dev/null
-    i=0
-    while kill -0 "${pid}" 2>/dev/null && [ "${i}" -lt 10 ]; do
-      sleep 1
-      i=$(( i + 1 ))
-    done
-    if kill -0 "${pid}" 2>/dev/null; then
-      kill -9 "${pid}" 2>/dev/null
-    fi
+    ns="$(readlink "/proc/${pid}/ns/mnt" 2>/dev/null)"
+    stop_pid1 "${pid}"
   fi
-  i=0
-  while service_locked && [ "${i}" -lt 10 ]; do
-    sleep 1
-    i=$(( i + 1 ))
-  done
-  rm -f "${PID_FILE}"
-  echo 'rootfs stopped'
+  # The supervisor is not an init process here, so its services outlive it.
+  # The whole mount namespace is stopped, which releases the containerd lock
+  # and the loop device.
+  if [ -n "${ns}" ]; then
+    log 'stopping the processes of the Layer 1 namespace'
+    kill_namespace "${ns}"
+  fi
+  if ! release_all_loops; then
+    err 'a loop device is still attached, a reboot clears it'
+  fi
+  rm -f "${RUN_DIR}/loop"
+  printf 'down\n' >"${NETWORK_STATE}"
+  sh "${MODDIR}/scripts/network.sh" down || err 'cannot remove every object'
+  trap - 0
+  unlock_start
+  log 'Layer 1 stopped, the host supervisor keeps running'
 }
 
 #######################################
-# Print the status of the container and its services.
+# Print the state of Layer 1, the image, and the Layer 0 objects.
 # Globals:
-#   BUSYBOX
-#   PID_FILE
-#   SERVICE_DIR
-# Returns:
-#   1 if rootfs is stopped.
+#   MODDIR
 #######################################
 show_status() {
-  local pid
-  if ! is_running; then
-    echo 'rootfs stopped'
-    return 1
+  local loop pid
+  pid="$(l1_pid)" || pid=''
+  if [ -n "${pid}" ]; then
+    log "layer 1: running (pid ${pid})"
+  else
+    log 'layer 1: stopped'
   fi
-  pid="$(cat "${PID_FILE}" 2>/dev/null)"
-  echo "rootfs running (runsvdir pid ${pid})"
-  "${BUSYBOX}" sv status "${SERVICE_DIR}"/* 2>/dev/null
+  echo
+  sh "${MODDIR}/scripts/image.sh" status
+  if [ -z "${pid}" ]; then
+    loop="$(image_loop_device)"
+    if [ -n "${loop}" ]; then
+      log "attention: the image is attached to ${loop}"
+      log 'a pending loop device is released by a phone reboot only'
+    fi
+  fi
+  echo
+  sh "${MODDIR}/scripts/network.sh" status
+  echo
+  sh "${MODDIR}/scripts/host.sh" status
 }
 
 #######################################
-# Print the last lines of the log.
+# Print the last lines of the Layer 1 log.
 # Globals:
 #   LOG_FILE
 # Arguments:
@@ -198,36 +210,145 @@ show_status() {
 #######################################
 show_log() {
   local lines="${1:-40}"
+  if [ ! -f "${LOG_FILE}" ]; then
+    err "no log yet: ${LOG_FILE}"
+    return 1
+  fi
   tail -n "${lines}" "${LOG_FILE}"
+}
+
+#######################################
+# Require a running Layer 1 and print its host PID.
+#######################################
+require_pid1() {
+  l1_pid || die 'Layer 1 is not running'
+}
+
+#######################################
+# Run a command with the namespaces and the root of PID 1.
+# Arguments:
+#   Command and arguments.
+#######################################
+exec_l1() {
+  local pid
+  [ "$#" -gt 0 ] || die 'usage: rootfs-service exec <command> [args...]'
+  pid="$(require_pid1)"
+  exec "${BUSYBOX}" nsenter -t "${pid}" -m -u -i -n -p -r -w -- \
+    /bin/busybox env -i "PATH=${L1_PATH}" HOME=/root TERM=xterm "$@"
+}
+
+#######################################
+# Open a shell with the namespaces and the root of PID 1.
+#######################################
+shell_l1() {
+  local pid
+  pid="$(require_pid1)"
+  exec "${BUSYBOX}" nsenter -t "${pid}" -m -u -i -n -p -r -w -- \
+    /bin/busybox env -i "PATH=${L1_PATH}" HOME=/root TERM="${TERM:-xterm}" \
+    /bin/sh -c 'cd "${HOME}"; exec /bin/sh'
+}
+
+
+#######################################
+# Control Docker inside Layer 1 with its OpenRC service.
+# Globals:
+#   BUSYBOX
+#   L1_PATH
+#######################################
+control_docker() {
+  local action="${1:-status}" pid
+  pid="$(require_pid1)"
+  case "${action}" in
+    log)
+      exec "${BUSYBOX}" nsenter -t "${pid}" -m -u -i -n -p -r -w -- \
+        /bin/busybox tail -n "${2:-40}" /var/log/docker.log
+      ;;
+    start | stop | restart | status)
+      exec "${BUSYBOX}" nsenter -t "${pid}" -m -u -i -n -p -r -w -- \
+        /bin/busybox env -i "PATH=${L1_PATH}" /sbin/rc-service docker \
+        "${action}"
+      ;;
+    *)
+      die 'usage: rootfs-service docker start|stop|restart|status|log [lines]'
+      ;;
+  esac
+}
+
+#######################################
+# Print the command usage.
+#######################################
+usage() {
+  cat >&2 <<'END'
+usage: rootfs-service <command> [argument]
+
+  start                 start Layer 1 and the host supervisor
+  stop                  stop Layer 1 and the host supervisor
+  restart               stop, then start
+  status                print the state of Layer 1, the image, and the network
+  health                run the health checks
+  log [lines]           print the last log lines
+  exec <command>        run a command inside Layer 1
+  shell                 open a shell inside Layer 1
+  host <command>        start, stop, or print the host supervisor
+  image <command>       manage the image, see: image help
+  docker <command>      start, stop, restart, print, or log Docker
+END
 }
 
 #######################################
 # Dispatch the command line arguments.
 #######################################
 main() {
-  case "${1:-}" in
+  local action="${1:-}"
+  [ -n "${action}" ] || {
+    usage
+    exit 1
+  }
+  shift
+  case "${action}" in
+    image)
+      exec sh "${MODDIR}/scripts/image.sh" "$@"
+      ;;
     start)
-      start_daemon
+      require_busybox
+      start_l1
       ;;
     stop)
-      stop_daemon
+      require_busybox
+      stop_l1
       ;;
     restart)
-      stop_daemon
-      start_daemon
+      require_busybox
+      stop_l1
+      start_l1
       ;;
     status)
+      require_busybox
       show_status
       ;;
+    health)
+      exec sh "${MODDIR}/scripts/health.sh"
+      ;;
     log)
-      show_log "${2:-}"
+      show_log "${1:-}"
+      ;;
+    exec)
+      exec_l1 "$@"
+      ;;
+    shell)
+      shell_l1
+      ;;
+    host)
+      exec sh "${MODDIR}/scripts/host.sh" "$@"
+      ;;
+    docker)
+      control_docker "$@"
       ;;
     *)
-      err "usage: $0 {start|stop|restart|status|log [lines]}"
+      usage
       exit 1
       ;;
   esac
 }
 
 main "$@"
-

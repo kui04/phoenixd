@@ -1,0 +1,55 @@
+#!/system/bin/sh
+# Supervises the battery thresholds for continuous operation.
+ROOTFS_HOME="${ROOTFS_HOME:-/data/adb/rootfs}"
+MODDIR="${MODDIR:-/data/adb/modules/headless}"
+. "${MODDIR}/scripts/common.sh"
+
+#######################################
+# Resume charging and exit on signal.
+#######################################
+cleanup() {
+  set_charge_state 0
+  set_fast_charge 1
+  exit 0
+}
+
+#######################################
+# Update the charging state from the battery level.
+#######################################
+check_charge() {
+  local cap
+  [ -d "${BATTERY_DIR}" ] || return 0
+  cap="$(cat "${BATTERY_DIR}/capacity" 2>/dev/null)"
+  case "${cap}" in
+    '' | *[!0-9]*) return 0 ;;
+  esac
+  if [ "${cap}" -ge "${CHARGE_STOP_LEVEL}" ]; then
+    if ! is_suspended; then
+      set_charge_state 1
+      log "charge: ${cap}%, suspended"
+    fi
+  elif [ "${cap}" -le "${CHARGE_START_LEVEL}" ]; then
+    if is_suspended; then
+      set_charge_state 0
+      set_fast_charge "${FAST_CHARGE}"
+      log "charge: ${cap}%, resumed"
+    fi
+  fi
+}
+
+exec >>"${RUN_DIR}/charge.log" 2>&1
+trap cleanup INT TERM
+if [ "${CHARGE_CONTROL}" != 1 ] || [ ! -d "${BATTERY_DIR}" ]; then
+  set_charge_state 0
+  set_fast_charge 1
+  log 'charge: control is off'
+  while :; do
+    sleep 3600
+  done
+fi
+set_fast_charge "${FAST_CHARGE}"
+log "charge: monitor started (${CHARGE_START_LEVEL}%-${CHARGE_STOP_LEVEL}%)"
+while :; do
+  check_charge
+  sleep "${CHARGE_INTERVAL}"
+done

@@ -1,0 +1,21 @@
+#!/system/bin/sh
+# The Layer 0 network agent. It owns the netns, the veth pair, table 9500,
+# its rules, and the WAN mirror. Every 15 seconds it converges while the
+# desired state is up, and removes the objects while it is down.
+ROOTFS_HOME="${ROOTFS_HOME:-/data/adb/rootfs}"
+MODDIR="${MODDIR:-/data/adb/modules/rootfs}"
+. "${MODDIR}/scripts/common.sh"
+
+export ROOTFS_HOME MODDIR
+
+exec >>"${RUN_DIR}/network.log" 2>&1
+log "agent started, pid $$"
+# network.sh sync reads the desired state under the network lock, so this
+# loop never acts on a state that control.sh has already replaced.
+while :; do
+  if ! sh "${MODDIR}/scripts/network.sh" sync; then
+    err 'sync failed, the next round retries'
+  fi
+  rotate_host_logs
+  sleep 15
+done

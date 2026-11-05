@@ -1,6 +1,0 @@
-id=dockerd
-name=Docker Engine (static)
-version=29.9.2
-versionCode=290902
-author=kui04
-description=Static Docker Engine in a private pivoted root with cgroup v1. CLI: /data/adb/dockerd/bin/docker
